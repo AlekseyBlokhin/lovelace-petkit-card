@@ -41,6 +41,37 @@ const INFO_ROW_SCHEMA = [
 
 const DEFAULT_NEW_INFO_ROW = { entity: '', name: '', icon: 'mdi:information-outline' };
 
+const CONTROL_ACTIONS = ['press', 'toggle_maintenance', 'toggle', 'more_info'];
+
+const CONTROLS_ROW_BASE_SCHEMA = [
+  { name: 'name', label: 'Name', selector: { text: {} } },
+  { name: 'icon', label: 'Icon', selector: { icon: {} } },
+  { name: 'action', label: 'Action', selector: { select: { options: CONTROL_ACTIONS, mode: 'dropdown' } } },
+];
+
+// Only the sub-fields relevant to a row's current `action` are shown, so
+// picking e.g. "press" doesn't clutter the row with toggle_maintenance's
+// start/exit/state entity fields.
+const CONTROLS_ROW_ACTION_SCHEMA = {
+  press: [
+    { name: 'entity', label: 'Entity', selector: { entity: {} } },
+    { name: 'confirm', label: 'Confirm text (optional)', selector: { text: {} } },
+  ],
+  toggle: [{ name: 'entity', label: 'Entity', selector: { entity: {} } }],
+  more_info: [{ name: 'entity', label: 'Entity', selector: { entity: {} } }],
+  toggle_maintenance: [
+    { name: 'start_entity', label: 'Start entity', selector: { entity: { domain: 'button' } } },
+    { name: 'exit_entity', label: 'Exit entity', selector: { entity: { domain: 'button' } } },
+    { name: 'state_entity', label: 'State entity (optional)', selector: { entity: {} } },
+  ],
+};
+
+function controlsRowSchema(action) {
+  return [...CONTROLS_ROW_BASE_SCHEMA, ...(CONTROLS_ROW_ACTION_SCHEMA[action] || [])];
+}
+
+const DEFAULT_NEW_CONTROL_ROW = { name: '', icon: 'mdi:gesture-tap-button', action: 'press', entity: '' };
+
 const MAIN_SCHEMA = [
   { name: 'title', selector: { text: {} } },
   {
@@ -139,13 +170,20 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
           <div id="info-rows"></div>
           <button class="add-btn" id="add-info-row" type="button">+ Add chip</button>
         </div>
+        <div class="section">
+          <div class="section-title">Controls row (buttons)</div>
+          <div id="controls-rows"></div>
+          <button class="add-btn" id="add-control-row" type="button">+ Add control</button>
+        </div>
       </div>
     `;
     this._renderMainForm();
     this._renderCats();
     this._renderInfoRows();
+    this._renderControlsRows();
     this.shadowRoot.getElementById('add-cat').addEventListener('click', () => this._addCat());
     this.shadowRoot.getElementById('add-info-row').addEventListener('click', () => this._addInfoRow());
+    this.shadowRoot.getElementById('add-control-row').addEventListener('click', () => this._addControlRow());
   }
 
   _renderCats() {
@@ -243,6 +281,59 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _removeInfoRow(index) {
     const infoRow = (this._config.info_row || []).filter((_spec, i) => i !== index);
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
+    this._render();
+  }
+
+  _renderControlsRows() {
+    const container = this.shadowRoot.getElementById('controls-rows');
+    container.innerHTML = '';
+    const rows = this._config.controls_row || [];
+    rows.forEach((spec, index) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.dataset.index = String(index);
+
+      const form = /** @type {any} */ (document.createElement('ha-form'));
+      form.schema = controlsRowSchema(spec.action);
+      form.data = spec;
+      form.hass = this._hass;
+      form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+      form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+        ev.stopPropagation();
+        this._updateControlRow(index, ev.detail.value);
+      });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => this._removeControlRow(index));
+
+      row.appendChild(form);
+      row.appendChild(removeBtn);
+      container.appendChild(row);
+    });
+  }
+
+  _updateControlRow(index, newSpec) {
+    const controlsRow = [...(this._config.controls_row || [])];
+    const prevAction = controlsRow[index] && controlsRow[index].action;
+    controlsRow[index] = newSpec;
+    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
+    // The action determines which sub-fields are shown; if it changed,
+    // re-render this section so the row's schema picks up the new fields.
+    if (newSpec.action !== prevAction) this._renderControlsRows();
+  }
+
+  _addControlRow() {
+    const controlsRow = [...(this._config.controls_row || []), { ...DEFAULT_NEW_CONTROL_ROW }];
+    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
+    this._render();
+  }
+
+  _removeControlRow(index) {
+    const controlsRow = (this._config.controls_row || []).filter((_spec, i) => i !== index);
+    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
     this._render();
   }
 
