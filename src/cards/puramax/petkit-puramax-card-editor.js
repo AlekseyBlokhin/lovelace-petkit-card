@@ -26,6 +26,21 @@ const CAT_SCHEMA = [
 
 const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7', last_visit_duration_entity: '' };
 
+// `value_map` (mapping a raw entity state to a display string) has no clean
+// ha-form widget for an arbitrary object-of-strings, so it stays YAML-only
+// for v1 (documented in the README) and is intentionally left out here.
+const INFO_ROW_SCHEMA = [
+  { name: 'entity', label: 'Entity', selector: { entity: {} } },
+  { name: 'name', label: 'Name', selector: { text: {} } },
+  { name: 'icon', label: 'Icon', selector: { icon: {} } },
+  { name: 'unit', label: 'Unit', selector: { text: {} } },
+  { name: 'warn_below', label: 'Warn below', selector: { number: { mode: 'box' } } },
+  { name: 'warn_above', label: 'Warn above', selector: { number: { mode: 'box' } } },
+  { name: 'warn_state', label: 'Warn state', selector: { text: {} } },
+];
+
+const DEFAULT_NEW_INFO_ROW = { entity: '', name: '', icon: 'mdi:information-outline' };
+
 const MAIN_SCHEMA = [
   { name: 'title', selector: { text: {} } },
   {
@@ -119,11 +134,18 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
           <div id="cats-rows"></div>
           <button class="add-btn" id="add-cat" type="button">+ Add cat</button>
         </div>
+        <div class="section">
+          <div class="section-title">Info row (status chips)</div>
+          <div id="info-rows"></div>
+          <button class="add-btn" id="add-info-row" type="button">+ Add chip</button>
+        </div>
       </div>
     `;
     this._renderMainForm();
     this._renderCats();
+    this._renderInfoRows();
     this.shadowRoot.getElementById('add-cat').addEventListener('click', () => this._addCat());
+    this.shadowRoot.getElementById('add-info-row').addEventListener('click', () => this._addInfoRow());
   }
 
   _renderCats() {
@@ -172,6 +194,55 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _removeCat(index) {
     const cats = (this._config.cats || []).filter((_cat, i) => i !== index);
     this._fireConfigChanged({ ...this._config, cats });
+    this._render();
+  }
+
+  _renderInfoRows() {
+    const container = this.shadowRoot.getElementById('info-rows');
+    container.innerHTML = '';
+    const rows = this._config.info_row || [];
+    rows.forEach((spec, index) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.dataset.index = String(index);
+
+      const form = /** @type {any} */ (document.createElement('ha-form'));
+      form.schema = INFO_ROW_SCHEMA;
+      form.data = spec;
+      form.hass = this._hass;
+      form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+      form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+        ev.stopPropagation();
+        this._updateInfoRow(index, ev.detail.value);
+      });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => this._removeInfoRow(index));
+
+      row.appendChild(form);
+      row.appendChild(removeBtn);
+      container.appendChild(row);
+    });
+  }
+
+  _updateInfoRow(index, newSpec) {
+    const infoRow = [...(this._config.info_row || [])];
+    infoRow[index] = newSpec;
+    this._fireConfigChanged({ ...this._config, info_row: infoRow });
+  }
+
+  _addInfoRow() {
+    const infoRow = [...(this._config.info_row || []), { ...DEFAULT_NEW_INFO_ROW }];
+    this._fireConfigChanged({ ...this._config, info_row: infoRow });
+    this._render();
+  }
+
+  _removeInfoRow(index) {
+    const infoRow = (this._config.info_row || []).filter((_spec, i) => i !== index);
+    this._fireConfigChanged({ ...this._config, info_row: infoRow });
     this._render();
   }
 
