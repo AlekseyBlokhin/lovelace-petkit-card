@@ -1,0 +1,66 @@
+# Full example configuration for the petkit-puramax-card, referenced from
+# README.md's configuration reference. Every entity id below is a
+# placeholder — replace them with your own PETKIT PURAMAX entities.
+#
+# See README.md for the full field-by-field reference, and the
+# `blueprints/automation/petkit_per_cat_visit_tracker.yaml` Blueprint for
+# how to populate each cat's `last_visit_duration_entity`.
+
+type: custom:petkit-puramax-card
+title: PETKIT PURAMAX
+
+device_entities:
+  error: sensor.petkit_puramax_error
+  last_event: sensor.petkit_puramax_last_event
+  state: sensor.petkit_puramax_state
+
+# Optional: relabel or add device event states without editing the card.
+# Merged over the built-in PURAMAX defaults (this config wins on conflicts).
+event_labels:
+  maintenance_mode: Maintenance mode
+  manual_odor_completed: Manual odor removal done
+  auto_cleaning_completed: Auto cleaning done
+
+cats:
+  - name: Whiskers
+    color: "#4fc3f7"
+    last_visit_duration_entity: input_number.whiskers_last_visit_duration
+  - name: Mittens
+    color: "#ff8a65"
+    last_visit_duration_entity: input_number.mittens_last_visit_duration
+
+info_row:
+  - entity: sensor.petkit_puramax_consumable_remaining
+    name: Consumable
+    icon: mdi:spray-bottle
+    unit: "%"
+    warn_below: 10
+  - entity: binary_sensor.petkit_puramax_bin_full
+    name: Waste bin
+    icon: mdi:trash-can
+    value_map:
+      "on": Full
+      "off": OK
+    warn_state: "on"
+
+controls_row:
+  - name: Clean now
+    icon: mdi:broom
+    action: press
+    entity: button.petkit_puramax_clean
+  - name: Odor removal
+    icon: mdi:spray-bottle
+    action: press
+    entity: button.petkit_puramax_odor_removal
+    confirm: Run a manual odor removal cycle now?
+  - name: Maintenance
+    icon: mdi:wrench
+    action: toggle_maintenance
+    start_entity: button.petkit_puramax_maintenance_start
+    exit_entity: button.petkit_puramax_maintenance_exit
+  - name: Details
+    icon: mdi:information-outline
+    action: more_info
+    entity: sensor.petkit_puramax_state
+
+decline_threshold_pct: 60
