@@ -6,18 +6,13 @@ import { bucketByDay, summarize } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
 import { getState, fireMoreInfo, callService, pressButton } from '../../lib/ha-helpers.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
-import { DEFAULT_TITLE, CHART_WIDTH, CHART_HEIGHT, CHART_PADDING } from './petkit-puramax-card.const.js';
-
-// PURAMAX-vocabulary event labels for `device_entities.last_event` state
-// values. TODO(next commit): this is currently hardcoded PURAMAX firmware
-// vocabulary baked into DOM code, same as the original hand-authored card —
-// it will be moved to a config-overridable default.
-const EVENT_LABELS = {
-  maintenance_mode: 'Maintenance mode',
-  manual_odor_completed: 'Manual odor removal done',
-  auto_cleaning_completed: 'Auto cleaning done',
-  no_events_yet: null,
-};
+import {
+  DEFAULT_TITLE,
+  DEFAULT_EVENT_LABELS,
+  CHART_WIDTH,
+  CHART_HEIGHT,
+  CHART_PADDING,
+} from './petkit-puramax-card.const.js';
 
 /**
  * PETKIT PURAMAX litter box card: device status, controls, a day-switchable
@@ -464,8 +459,11 @@ export class PetkitPuramaxCard extends HTMLElement {
     }
   }
 
+  // Merges any config-provided `event_labels` over the PURAMAX firmware
+  // defaults (config wins), so a different device/firmware vocabulary can
+  // be supported purely via config, with no card changes.
   _eventLabels() {
-    return EVENT_LABELS;
+    return { ...DEFAULT_EVENT_LABELS, ...(this._config.event_labels || {}) };
   }
 
   _renderAnalyticsArea() {

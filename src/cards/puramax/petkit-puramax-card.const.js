@@ -1,3 +1,24 @@
+/**
+ * Default labels for `device_entities.last_event` state values, as reported
+ * by PETKIT PURAMAX firmware. This is PURAMAX-specific vocabulary — an
+ * architecture audit found it hardcoded inline in the card's DOM-rendering
+ * code, which meant a different PETKIT device (or a future firmware
+ * version with new event names) couldn't be supported without editing the
+ * card. It's now a config-overridable default: an optional `event_labels`
+ * config object is shallow-merged over this map (config wins).
+ *
+ * A value of `null` means "don't show a Working Records row for this event"
+ * (used for the device's own "nothing has happened yet" placeholder state).
+ *
+ * @type {Record<string, string|null>}
+ */
+export const DEFAULT_EVENT_LABELS = {
+  maintenance_mode: 'Maintenance mode',
+  manual_odor_completed: 'Manual odor removal done',
+  auto_cleaning_completed: 'Auto cleaning done',
+  no_events_yet: null,
+};
+
 /** Default card title shown when config doesn't set one. */
 export const DEFAULT_TITLE = 'PETKIT PURAMAX';
 
