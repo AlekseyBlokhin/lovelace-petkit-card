@@ -28,8 +28,27 @@ export class PetkitPuramaxCard extends HTMLElement {
     return null;
   }
 
+  // Returns a minimal-but-valid example config so dragging this card from
+  // HA's card picker doesn't immediately throw in setConfig (which requires
+  // `device_entities` and a non-empty `cats`). Every id here is an obvious
+  // placeholder the user is expected to replace with their own entities.
   static getStubConfig() {
-    return {};
+    return {
+      type: 'custom:petkit-puramax-card',
+      title: 'PETKIT PURAMAX',
+      device_entities: {
+        error: 'sensor.example_petkit_error',
+        last_event: 'sensor.example_petkit_last_event',
+        state: 'sensor.example_petkit_state',
+      },
+      cats: [
+        {
+          name: 'Example Cat',
+          color: '#4fc3f7',
+          last_visit_duration_entity: 'input_number.example_cat_last_visit_duration',
+        },
+      ],
+    };
   }
 
   setConfig(config) {
