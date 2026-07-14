@@ -1,7 +1,11 @@
 import { PetkitPuramaxCard } from './cards/puramax/petkit-puramax-card.js';
+import { PetkitPuramaxCardEditor } from './cards/puramax/petkit-puramax-card-editor.js';
 
 if (!customElements.get('petkit-puramax-card')) {
   customElements.define('petkit-puramax-card', PetkitPuramaxCard);
+}
+if (!customElements.get('petkit-puramax-card-editor')) {
+  customElements.define('petkit-puramax-card-editor', PetkitPuramaxCardEditor);
 }
 
 // `window.customCards` is the Lovelace-wide registry other custom cards

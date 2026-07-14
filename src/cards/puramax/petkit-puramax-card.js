@@ -25,7 +25,7 @@ import {
  */
 export class PetkitPuramaxCard extends HTMLElement {
   static getConfigElement() {
-    return null;
+    return document.createElement('petkit-puramax-card-editor');
   }
 
   // Returns a minimal-but-valid example config so dragging this card from
