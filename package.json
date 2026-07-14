@@ -1,0 +1,36 @@
+{
+  "name": "lovelace-petkit-card",
+  "version": "0.1.0",
+  "description": "Home Assistant Lovelace custom card for PETKIT smart litter boxes: device status, controls, and per-cat visit analytics.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Aleksey Blokhin",
+  "homepage": "https://github.com/AlekseyBlokhin/lovelace-petkit-card",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlekseyBlokhin/lovelace-petkit-card.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AlekseyBlokhin/lovelace-petkit-card/issues"
+  },
+  "keywords": [
+    "home-assistant",
+    "hacs",
+    "lovelace",
+    "lovelace-card",
+    "custom-card",
+    "petkit",
+    "litter-box"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p jsconfig.json"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
