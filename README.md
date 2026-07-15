@@ -24,14 +24,22 @@ sensors your PetKit integration already provides.
 - A merged Working Records timeline (visits + device events).
 - Today / 3-day-avg / 7-day-avg per-cat analytics, with a decline/spike
   warning banner.
+- A per-cat "no visit in N hours" alert banner (configurable, default 8h),
+  independent of the decline banner's rolling-average comparison — it won't
+  miss a gradual decline the way a percentage-vs-average check can, since
+  it's an absolute time check. Optionally pushes a notification too, via any
+  `notify.*` entity you configure.
 - A real visual config editor (drag the card onto a dashboard and configure
-  it with forms — no YAML required to get started).
+  it with forms — no YAML required to get started), built entirely from
+  Home Assistant's own native frontend elements (`ha-form`,
+  `ha-expansion-panel`, `ha-icon-button`, a real color-picker for cat
+  colors) so it looks and behaves like Home Assistant's own settings pages.
 
 ## Prerequisites
 
 - **A PetKit Home Assistant integration**, already installed and configured, exposing your device's entities — either [`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit) or [`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit). This card only reads entities; it doesn't talk to PetKit's API itself, and doesn't care which of the two integrations provided them.
 - **No helper entities and no companion automation.** The card reads directly from your integration's own "total use" and (if you have more than one cat) "last used by" sensors.
-- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — built only on Home Assistant's own built-in `ha-form`/`ha-icon` elements, zero runtime npm dependencies (`package.json` has none). You don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
+- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — built only on Home Assistant's own built-in frontend elements (`ha-form`, `ha-icon`, `ha-expansion-panel`, `ha-icon-button`), zero runtime npm dependencies (`package.json` has none). You don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
 
 ## Installation
 
@@ -88,7 +96,7 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Lets you relabel or add event states without editing the card. Set a state's value to `null` to hide it from Working Records entirely — see note below. YAML-only — no visual editor field. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See below. |
 | `cats[].name` | yes | string | — | Display name. Must exactly match this cat's value as reported by `device_entities.last_used_by` — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
-| `cats[].color` | yes | string (CSS color) | — | Chart/legend color for this cat. |
+| `cats[].color` | yes | string (CSS color) | — | Chart/legend color for this cat. Picked via HA's native color selector in the visual editor. |
 | `info_row` | no | array | `[]` | Status chips, in order. See below. |
 | `info_row[].entity` | yes | entity id | — | Entity whose state is displayed. |
 | `info_row[].name` | no | string | entity id | Chip label. |
@@ -108,6 +116,8 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `controls_row[].exit_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when currently in maintenance mode. |
 | `controls_row[].state_entity` | no | entity id | `device_entities.state` | Overrides which entity `toggle_maintenance` reads to decide its current mode. |
 | `decline_threshold_pct` | no | number, 0-100 | `60` | Analytics warns when today's total is below this percent of the 7-day average (or symmetrically above `200 - this`). |
+| `no_visit_alert_hours` | no | number, 1-168 | `8` | Shows a per-cat "hasn't used the litter box" banner once a cat's most recent visit is at least this many hours ago. An absolute check, not relative to history — won't drift the way a rolling-average comparison can. |
+| `notify_service` | no | entity id (`notify` domain) | — | If set, also calls this notify entity/service (once per overdue episode, not on every re-render) when a cat crosses `no_visit_alert_hours`. This only fires while the card is actually loaded in a browser/companion-app tab — for a guarantee independent of whether a dashboard is open, pair it with (or use instead) a native HA automation. |
 
 `cats`, `info_row`, and `controls_row` all have a repeating-row visual
 editor (add/remove buttons); `value_map` and `event_labels` are YAML-only

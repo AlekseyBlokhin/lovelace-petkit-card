@@ -39,6 +39,24 @@ export function formatClockDuration(seconds) {
 }
 
 /**
+ * Formats an elapsed-hours count as a compact "time ago" string for the
+ * no-visit alert banner.
+ *
+ * - Under 1h: "under 1h"
+ * - Under 48h: "Nh" (rounded down, e.g. "9h")
+ * - 48h and above: "Nd" (rounded down, e.g. "3d")
+ *
+ * @param {number} hours
+ * @returns {string}
+ */
+export function formatHoursAgo(hours) {
+  const h = Math.floor(hours);
+  if (h < 1) return 'under 1h';
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/**
  * Escapes a value for safe interpolation into HTML text or attribute
  * context. The card builds its DOM via raw `innerHTML` template strings, and
  * several of those strings interpolate live HA entity *state* values (e.g. a

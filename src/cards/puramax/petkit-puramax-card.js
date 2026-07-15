@@ -1,8 +1,8 @@
-import { formatDuration, escapeHtml } from '../../lib/format.js';
+import { formatDuration, formatHoursAgo, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
 import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
-import { bucketByDay, summarize } from '../../lib/analytics.js';
+import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
 import { getState, fireMoreInfo, callService, pressButton } from '../../lib/ha-helpers.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
@@ -10,6 +10,7 @@ import {
   DEFAULT_TITLE,
   DEFAULT_EVENT_LABELS,
   DEFAULT_DECLINE_THRESHOLD_PCT,
+  DEFAULT_NO_VISIT_ALERT_HOURS,
   MAX_VALID_VISIT_SECONDS,
   CHART_WIDTH,
   CHART_HEIGHT,
@@ -108,6 +109,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       this._render();
       this._loadDay();
       this._loadAnalytics();
+      this._startNoVisitTimer();
       return;
     }
     this._updateLiveValues();
@@ -128,7 +130,25 @@ export class PetkitPuramaxCard extends HTMLElement {
       this._render();
       this._loadDay();
       this._loadAnalytics();
+      this._startNoVisitTimer();
     }
+  }
+
+  disconnectedCallback() {
+    if (this._noVisitTimer) {
+      clearInterval(this._noVisitTimer);
+      this._noVisitTimer = null;
+    }
+  }
+
+  // The "no visit in N hours" alert must keep advancing purely from time
+  // passing, not just when a new visit re-triggers `_loadAnalytics()` --
+  // otherwise a cat that's overdue would only get flagged the next time
+  // something else happens to change `total_use`. A cheap periodic recheck
+  // against the already-fetched `lastVisitTs` (no new WS call) covers that.
+  _startNoVisitTimer() {
+    if (this._noVisitTimer) return;
+    this._noVisitTimer = setInterval(() => this._checkNoVisitAlerts(), 5 * 60 * 1000);
   }
 
   // A visit bumps the device's total_use sensor. If that happens live, the
@@ -276,11 +296,60 @@ export class PetkitPuramaxCard extends HTMLElement {
     cfg.cats.forEach((cat) => {
       const events = visits.filter((v) => v.cat === cat).map((v) => ({ value: v.duration, ts: v.ts }));
       const byDay = bucketByDay(events, { dayKeyFn: dayKey });
-      perCat[cat.name] = summarize(byDay, todayKey);
+      const lastVisitTs = events.length ? Math.max(...events.map((e) => e.ts)) : null;
+      perCat[cat.name] = { ...summarize(byDay, todayKey), lastVisitTs };
     });
     this._analytics = perCat;
     this._loadingAnalytics = false;
+    this._checkNoVisitAlerts();
     this._renderAnalyticsArea();
+  }
+
+  // Recomputes each cat's overdue-for-a-visit state against the current
+  // time (no new fetch -- reuses `lastVisitTs` from the last `_loadAnalytics()`
+  // fetch), fires a notification on the moment a cat first becomes overdue,
+  // and clears the "already notified" flag once they've visited again.
+  //
+  // This only ever runs while the card is actually mounted and rendering --
+  // a frontend card, unlike a backend automation, cannot alert you while no
+  // browser/companion-app tab has it loaded. `notify_service` is best used
+  // alongside, not instead of, a native HA automation if you need a
+  // guarantee independent of whether the dashboard is open.
+  _checkNoVisitAlerts() {
+    if (!this._analytics || !this._built) return;
+    const cfg = this._config;
+    const thresholdHours = cfg.no_visit_alert_hours ?? DEFAULT_NO_VISIT_ALERT_HOURS;
+    const now = Date.now();
+    if (!this._notifiedCats) this._notifiedCats = new Set();
+    cfg.cats.forEach((cat) => {
+      const a = this._analytics[cat.name];
+      if (!a) return;
+      const result = detectNoVisitAlert({ lastVisitTs: a.lastVisitTs, now, thresholdHours });
+      a.noVisitAlert = result;
+      const alreadyNotified = this._notifiedCats.has(cat.name);
+      if (result.alerting && !alreadyNotified) {
+        this._notifiedCats.add(cat.name);
+        this._sendNoVisitNotification(cat, result);
+      } else if (!result.alerting && alreadyNotified) {
+        this._notifiedCats.delete(cat.name);
+      }
+    });
+    this._renderAnalyticsArea();
+  }
+
+  _sendNoVisitNotification(cat, result) {
+    const service = this._config.notify_service;
+    if (!service || !this._hass) return;
+    const dotIndex = service.indexOf('.');
+    if (dotIndex === -1) return;
+    const domain = service.slice(0, dotIndex);
+    const serviceName = service.slice(dotIndex + 1);
+    if (domain !== 'notify' || !serviceName) return;
+    const message =
+      result.hoursSince == null
+        ? `${cat.name} hasn't used the litter box yet in the tracked history.`
+        : `${cat.name} hasn't used the litter box in over ${Math.floor(result.hoursSince)}h.`;
+    callService(this._hass, 'notify', serviceName, { message, title: 'Litter box alert' });
   }
 
   // ---------- render ----------
@@ -307,6 +376,7 @@ export class PetkitPuramaxCard extends HTMLElement {
         </div>
         <div class="analytics-section">
           <div class="section-title">Analytics</div>
+          <div id="no-visit-banner"></div>
           <div id="decline-banner"></div>
           <div class="analytics-grid" id="analytics-grid"></div>
         </div>
@@ -552,11 +622,21 @@ export class PetkitPuramaxCard extends HTMLElement {
     }));
     const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
+    // Coordinators/integrations occasionally flicker an entity to
+    // unavailable/unknown and back to whatever value it held before the
+    // blip -- that recovery is a re-assertion of the same event, not a new
+    // one, so it must not become a second Working Records row. Comparing
+    // only against the immediately preceding point would miss this (the
+    // preceding point is the hidden "unavailable" itself), so track the
+    // last real value shown instead and skip an exact repeat of it.
+    let lastShownVal = null;
     eventHist.forEach((point) => {
       const val = point.s ?? point.state;
       const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
       if (!val || !ts) return;
       if (val in eventLabels && eventLabels[val] === null) return;
+      if (val === lastShownVal) return;
+      lastShownVal = val;
       const label = eventLabels[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       records.push({ ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: label });
     });
@@ -592,6 +672,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!this._built) return;
     const grid = this.shadowRoot.getElementById('analytics-grid');
     const banner = this.shadowRoot.getElementById('decline-banner');
+    const noVisitBanner = this.shadowRoot.getElementById('no-visit-banner');
     if (!grid) return;
     // Same no-flicker rationale as _renderChartArea (see its comment): keep
     // whatever's already rendered until fresh analytics resolve. On first
@@ -625,6 +706,18 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (banner) {
       banner.innerHTML = warnings.length
         ? warnings.map((w) => `<div class="warn-banner"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>${w}</div>`).join('')
+        : '';
+    }
+    if (noVisitBanner) {
+      const overdueCats = cfg.cats.filter((cat) => this._analytics[cat.name]?.noVisitAlert?.alerting);
+      noVisitBanner.innerHTML = overdueCats.length
+        ? overdueCats
+            .map((cat) => {
+              const { hoursSince } = this._analytics[cat.name].noVisitAlert;
+              const since = hoursSince == null ? 'no visits recorded yet' : `last seen ${formatHoursAgo(hoursSince)} ago`;
+              return `<div class="no-visit-banner"><ha-icon icon="mdi:cat-alert"></ha-icon>${escapeHtml(cat.name)} hasn't used the litter box recently (${escapeHtml(since)}).</div>`;
+            })
+            .join('')
         : '';
     }
   }

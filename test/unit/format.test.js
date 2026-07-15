@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatClockDuration, escapeHtml } from '../../src/lib/format.js';
+import { formatDuration, formatClockDuration, formatHoursAgo, escapeHtml } from '../../src/lib/format.js';
 
 describe('formatDuration', () => {
   it('formats 0 seconds as "0s"', () => {
@@ -66,6 +66,23 @@ describe('formatClockDuration', () => {
   it('treats null/undefined/NaN as 0', () => {
     expect(formatClockDuration(null)).toBe('00\'00"');
     expect(formatClockDuration(undefined)).toBe('00\'00"');
+  });
+});
+
+describe('formatHoursAgo', () => {
+  it('shows "under 1h" for less than a full hour', () => {
+    expect(formatHoursAgo(0.5)).toBe('under 1h');
+  });
+
+  it('shows a whole-hour count, rounded down, under 48h', () => {
+    expect(formatHoursAgo(9.9)).toBe('9h');
+    expect(formatHoursAgo(47.9)).toBe('47h');
+  });
+
+  it('switches to days at 48h and above', () => {
+    expect(formatHoursAgo(48)).toBe('2d');
+    expect(formatHoursAgo(71)).toBe('2d');
+    expect(formatHoursAgo(72)).toBe('3d');
   });
 });
 

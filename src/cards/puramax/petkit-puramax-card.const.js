@@ -31,6 +31,9 @@ export const DEFAULT_TITLE = 'PETKIT PURAMAX';
 /** Default decline/spike alert threshold, as a percent (0-100). */
 export const DEFAULT_DECLINE_THRESHOLD_PCT = 60;
 
+/** Default "no visit in N hours" alert threshold, in hours. */
+export const DEFAULT_NO_VISIT_ALERT_HOURS = 8;
+
 /**
  * Upper bound (seconds) on a plausible single-visit duration, used when
  * reconstructing visits from a device's cumulative "total use" counter.

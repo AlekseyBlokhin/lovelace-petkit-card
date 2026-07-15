@@ -1,9 +1,12 @@
 /**
  * Visual config editor for petkit-puramax-card.
  *
- * No new runtime dependency: this composes native `<ha-form>` elements
- * (globally available in the Home Assistant frontend by tag name, standard
- * practice for custom card editors — no import needed) for scalar fields.
+ * No new runtime dependency: this composes native Home Assistant frontend
+ * elements (globally available by tag name, standard practice for custom
+ * card editors — no import needed): `ha-form` for scalar fields,
+ * `ha-expansion-panel` to group each repeating-row section the way HA's own
+ * settings pages group lists, and `ha-icon-button`/`ha-icon` for row
+ * actions instead of plain text buttons.
  *
  * `ha-form`'s `expandable` schema type only groups fields visually, it does
  * NOT nest the bound data object. Since `device_entities` is nested in the
@@ -18,9 +21,12 @@
 // `device_entities.last_used_by` (e.g. the PetKit integration's "Last used
 // by" sensor) -- that's how the card attributes reconstructed visits back
 // to a specific cat, with no per-cat helper entity needed.
+//
+// `color` uses the native `ui_color` selector (a real HA color-picker
+// widget, not a hand-rolled swatch) rather than a plain hex-text field.
 const CAT_SCHEMA = [
   { name: 'name', label: 'Name', selector: { text: {} } },
-  { name: 'color', label: 'Color', selector: { text: {} } },
+  { name: 'color', label: 'Color', selector: { ui_color: {} } },
 ];
 
 const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7' };
@@ -94,9 +100,26 @@ const MAIN_SCHEMA = [
     ],
   },
   {
-    name: 'decline_threshold_pct',
-    label: 'Decline/spike alert threshold (%)',
-    selector: { number: { min: 10, max: 100, mode: 'box' } },
+    name: 'alerts',
+    type: 'expandable',
+    title: 'Analytics & alerts',
+    schema: [
+      {
+        name: 'decline_threshold_pct',
+        label: 'Decline/spike alert threshold (%)',
+        selector: { number: { min: 10, max: 100, mode: 'box' } },
+      },
+      {
+        name: 'no_visit_alert_hours',
+        label: 'Warn if no visit in (hours)',
+        selector: { number: { min: 1, max: 168, mode: 'box' } },
+      },
+      {
+        name: 'notify_service',
+        label: 'Push a notification too (optional)',
+        selector: { entity: { domain: 'notify' } },
+      },
+    ],
   },
 ];
 
@@ -106,9 +129,20 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._render();
   }
 
+  // `hass` is re-set constantly -- on essentially every state change
+  // anywhere in the whole HA instance, not just when this card's own
+  // entities change -- so a full `_render()` (innerHTML rebuild) here would
+  // tear down and recreate every `ha-form`/`<input>` on practically every
+  // keystroke the user makes elsewhere in the dialog, which stole focus and
+  // reset the dialog's scroll position to the top after each character
+  // typed. Propagate the new `hass` onto the already-built forms in place
+  // instead; only `setConfig`/row add-remove (genuine structural changes)
+  // rebuild the DOM.
   set hass(hass) {
     this._hass = hass;
-    this._render();
+    (this._formEls || []).forEach((form) => {
+      form.hass = hass;
+    });
   }
 
   get hass() {
@@ -141,6 +175,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       device_entities_last_event: de.last_event,
       device_entities_state: de.state,
       decline_threshold_pct: cfg.decline_threshold_pct,
+      no_visit_alert_hours: cfg.no_visit_alert_hours,
+      notify_service: cfg.notify_service,
     };
   }
 
@@ -156,38 +192,74 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       state: flatValue.device_entities_state,
     };
     cfg.decline_threshold_pct = flatValue.decline_threshold_pct;
+    cfg.no_visit_alert_hours = flatValue.no_visit_alert_hours;
+    cfg.notify_service = flatValue.notify_service;
     this._fireConfigChanged(cfg);
   }
 
   _render() {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     if (!this._config) return;
+    this._formEls = [];
+    const catCount = (this._config.cats || []).length;
+    const infoCount = (this._config.info_row || []).length;
+    const controlCount = (this._config.controls_row || []).length;
     this.shadowRoot.innerHTML = `
       <style>
-        .editor { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; }
-        .section-title { font-weight: 500; margin-bottom: 4px; }
-        .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-        .row ha-form { flex: 1 1 auto; }
-        .remove-btn, .add-btn { cursor: pointer; border: 1px solid var(--divider-color, #ccc); border-radius: 6px; background: none; padding: 6px 10px; font-size: 0.85em; }
-        .remove-btn:hover, .add-btn:hover { background: var(--secondary-background-color, #eee); }
+        .editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
+        ha-expansion-panel { --expansion-panel-summary-padding: 0 16px; border-radius: var(--ha-card-border-radius, 12px); }
+        .panel-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 16px; }
+        .row { display: flex; align-items: center; gap: 4px; }
+        .row ha-form { flex: 1 1 auto; min-width: 0; }
+        .add-row { display: flex; justify-content: flex-start; margin-top: 4px; }
+        .add-btn {
+          display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+          border: 1px solid var(--divider-color, #ccc); border-radius: 8px;
+          background: none; color: var(--primary-color); padding: 8px 14px;
+          font-size: 0.85em; font-weight: 500; font-family: inherit;
+        }
+        .add-btn:hover { background: rgba(var(--rgb-primary-color, 3,169,244), 0.08); }
+        .add-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+        .empty-hint { color: var(--secondary-text-color); font-size: 0.85em; padding: 4px 0 8px; }
       </style>
       <div class="editor">
         <div id="main-section"></div>
-        <div class="section">
-          <div class="section-title">Cats</div>
-          <div id="cats-rows"></div>
-          <button class="add-btn" id="add-cat" type="button">+ Add cat</button>
-        </div>
-        <div class="section">
-          <div class="section-title">Info row (status chips)</div>
-          <div id="info-rows"></div>
-          <button class="add-btn" id="add-info-row" type="button">+ Add chip</button>
-        </div>
-        <div class="section">
-          <div class="section-title">Controls row (buttons)</div>
-          <div id="controls-rows"></div>
-          <button class="add-btn" id="add-control-row" type="button">+ Add control</button>
-        </div>
+
+        <ha-expansion-panel outlined header="Cats (${catCount})">
+          <div class="panel-body">
+            ${catCount === 0 ? '<div class="empty-hint">No cats configured yet.</div>' : ''}
+            <div id="cats-rows"></div>
+            <div class="add-row">
+              <button class="add-btn" id="add-cat" type="button">
+                <ha-icon icon="mdi:plus"></ha-icon>Add cat
+              </button>
+            </div>
+          </div>
+        </ha-expansion-panel>
+
+        <ha-expansion-panel outlined header="Status chips (${infoCount})">
+          <div class="panel-body">
+            ${infoCount === 0 ? '<div class="empty-hint">No status chips configured yet.</div>' : ''}
+            <div id="info-rows"></div>
+            <div class="add-row">
+              <button class="add-btn" id="add-info-row" type="button">
+                <ha-icon icon="mdi:plus"></ha-icon>Add chip
+              </button>
+            </div>
+          </div>
+        </ha-expansion-panel>
+
+        <ha-expansion-panel outlined header="Controls (${controlCount})">
+          <div class="panel-body">
+            ${controlCount === 0 ? '<div class="empty-hint">No control buttons configured yet.</div>' : ''}
+            <div id="controls-rows"></div>
+            <div class="add-row">
+              <button class="add-btn" id="add-control-row" type="button">
+                <ha-icon icon="mdi:plus"></ha-icon>Add control
+              </button>
+            </div>
+          </div>
+        </ha-expansion-panel>
       </div>
     `;
     this._renderMainForm();
@@ -197,6 +269,20 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this.shadowRoot.getElementById('add-cat').addEventListener('click', () => this._addCat());
     this.shadowRoot.getElementById('add-info-row').addEventListener('click', () => this._addInfoRow());
     this.shadowRoot.getElementById('add-control-row').addEventListener('click', () => this._addControlRow());
+  }
+
+  // Builds a row's trailing "remove" affordance as a native icon button
+  // (matching how HA's own settings lists remove an item) instead of a
+  // hand-styled text button.
+  _removeIconButton(onClick) {
+    const btn = /** @type {any} */ (document.createElement('ha-icon-button'));
+    btn.className = 'remove-btn';
+    btn.label = 'Remove';
+    const icon = document.createElement('ha-icon');
+    icon.setAttribute('icon', 'mdi:delete-outline');
+    btn.appendChild(icon);
+    btn.addEventListener('click', onClick);
+    return btn;
   }
 
   _renderCats() {
@@ -217,15 +303,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         ev.stopPropagation();
         this._updateCat(index, ev.detail.value);
       });
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'remove-btn';
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => this._removeCat(index));
+      this._formEls.push(form);
 
       row.appendChild(form);
-      row.appendChild(removeBtn);
+      row.appendChild(this._removeIconButton(() => this._removeCat(index)));
       container.appendChild(row);
     });
   }
@@ -266,15 +347,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         ev.stopPropagation();
         this._updateInfoRow(index, ev.detail.value);
       });
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'remove-btn';
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => this._removeInfoRow(index));
+      this._formEls.push(form);
 
       row.appendChild(form);
-      row.appendChild(removeBtn);
+      row.appendChild(this._removeIconButton(() => this._removeInfoRow(index)));
       container.appendChild(row);
     });
   }
@@ -315,15 +391,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         ev.stopPropagation();
         this._updateControlRow(index, ev.detail.value);
       });
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'remove-btn';
-      removeBtn.type = 'button';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => this._removeControlRow(index));
+      this._formEls.push(form);
 
       row.appendChild(form);
-      row.appendChild(removeBtn);
+      row.appendChild(this._removeIconButton(() => this._removeControlRow(index)));
       container.appendChild(row);
     });
   }
@@ -363,6 +434,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       ev.stopPropagation();
       this._onMainFormChanged(ev.detail.value);
     });
+    this._formEls.push(form);
     container.appendChild(form);
   }
 }

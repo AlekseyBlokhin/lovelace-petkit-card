@@ -11,7 +11,9 @@ devices" section for how to request support for other PETKIT devices.
 - Config-driven status chips and control buttons (`info_row` /
   `controls_row` — add, remove, or reorder purely in YAML).
 - A day-switchable per-cat visit chart, a Working Records timeline, and
-  today/3d-avg/7d-avg analytics with a decline/spike warning.
+  today/3d-avg/7d-avg analytics with a decline/spike warning and a
+  configurable "no visit in N hours" safety alert (optionally pushed as a
+  notification).
 - A real visual config editor — no YAML required to get started.
 - Per-cat visit data reconstructed straight from the device's own sensors —
   no helper entities, no companion automation to set up.

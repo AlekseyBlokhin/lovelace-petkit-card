@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bucketByDay, summarize, detectAnomaly } from '../../src/lib/analytics.js';
+import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert } from '../../src/lib/analytics.js';
 
 const dayKeyFn = (ts) => {
   const d = new Date(ts);
@@ -203,5 +203,38 @@ describe('detectAnomaly', () => {
 
   it('is gated exactly at daysOfHistory 3 (inclusive)', () => {
     expect(detectAnomaly({ ...base, daysOfHistory: 3, todayTotal: 50 })).toBe('low');
+  });
+});
+
+describe('detectNoVisitAlert', () => {
+  it('alerts with hoursSince: null when there is no last visit at all', () => {
+    expect(detectNoVisitAlert({ lastVisitTs: null, now: Date.now(), thresholdHours: 8 })).toEqual({
+      alerting: true,
+      hoursSince: null,
+    });
+  });
+
+  it('does not alert when the last visit is within the threshold', () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0).getTime();
+    const lastVisitTs = new Date(2026, 6, 15, 14, 0, 0).getTime(); // 6h ago
+    const result = detectNoVisitAlert({ lastVisitTs, now, thresholdHours: 8 });
+    expect(result.alerting).toBe(false);
+    expect(result.hoursSince).toBeCloseTo(6);
+  });
+
+  it('alerts once the last visit is at or beyond the threshold', () => {
+    const now = new Date(2026, 6, 15, 22, 0, 0).getTime();
+    const lastVisitTs = new Date(2026, 6, 15, 14, 0, 0).getTime(); // 8h ago
+    const result = detectNoVisitAlert({ lastVisitTs, now, thresholdHours: 8 });
+    expect(result.alerting).toBe(true);
+    expect(result.hoursSince).toBeCloseTo(8);
+  });
+
+  it('accepts a Date for `now`, not just epoch ms', () => {
+    const lastVisitTs = new Date(2026, 6, 15, 0, 0, 0).getTime();
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    const result = detectNoVisitAlert({ lastVisitTs, now, thresholdHours: 8 });
+    expect(result.alerting).toBe(true);
+    expect(result.hoursSince).toBeCloseTo(20);
   });
 });

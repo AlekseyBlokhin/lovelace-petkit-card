@@ -96,6 +96,77 @@ describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
     expect(infoRowForms(empty).length).toBe(0);
     expect(controlsRowForms(empty).length).toBe(0);
   });
+
+  it('includes no_visit_alert_hours and notify_service in the flattened main form data', () => {
+    const withAlerts = makeEditor();
+    withAlerts.setConfig(baseConfig({ no_visit_alert_hours: 12, notify_service: 'notify.mobile_app_x' }));
+    expect(mainForm(withAlerts).data).toMatchObject({
+      no_visit_alert_hours: 12,
+      notify_service: 'notify.mobile_app_x',
+    });
+  });
+});
+
+describe('PetkitPuramaxCardEditor: native HA chrome', () => {
+  let editor;
+
+  beforeEach(() => {
+    editor = makeEditor();
+    editor.setConfig(baseConfig());
+  });
+
+  it('groups each repeating-row section in a native ha-expansion-panel with a row-count header', () => {
+    const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
+    expect(panels.length).toBe(3);
+    const headers = Array.from(panels).map((p) => p.getAttribute('header'));
+    expect(headers).toEqual(['Cats (2)', 'Status chips (1)', 'Controls (1)']);
+  });
+
+  it('updates the panel header count after adding a cat', () => {
+    editor.shadowRoot.getElementById('add-cat').dispatchEvent(new Event('click', { bubbles: true }));
+    const catsPanel = editor.shadowRoot.querySelector('ha-expansion-panel');
+    expect(catsPanel.getAttribute('header')).toBe('Cats (3)');
+  });
+
+  it('uses a native ha-icon-button (not a text "Remove" button) for removing a row', () => {
+    const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
+    expect(removeBtn.tagName.toLowerCase()).toBe('ha-icon-button');
+    expect(removeBtn.querySelector('ha-icon').getAttribute('icon')).toBe('mdi:delete-outline');
+  });
+
+  it('removing a row via its icon button still fires config-changed correctly', () => {
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    editor.shadowRoot.querySelector('#cats-rows .remove-btn').dispatchEvent(new Event('click', { bubbles: true }));
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.cats.length).toBe(1);
+  });
+
+  it('uses the native ui_color selector for a cat\'s color field, not a plain text field', () => {
+    const schema = catForms(editor)[0].schema;
+    const colorField = schema.find((s) => s.name === 'color');
+    expect(colorField.selector).toEqual({ ui_color: {} });
+  });
+
+  it('exposes notify_service as an entity selector scoped to the notify domain', () => {
+    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
+    const notifyField = alertsGroup.schema.find((s) => s.name === 'notify_service');
+    expect(notifyField.selector).toEqual({ entity: { domain: 'notify' } });
+  });
+
+  it('exposes no_visit_alert_hours as a bounded number field', () => {
+    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
+    const hoursField = alertsGroup.schema.find((s) => s.name === 'no_visit_alert_hours');
+    expect(hoursField.selector).toEqual({ number: { min: 1, max: 168, mode: 'box' } });
+  });
+
+  it('shows an empty-state hint instead of a blank panel body when a section has no rows', () => {
+    const empty = makeEditor();
+    empty.setConfig({ type: 'custom:petkit-puramax-card' });
+    const hints = Array.from(empty.shadowRoot.querySelectorAll('.empty-hint')).map((el) => el.textContent);
+    expect(hints.length).toBe(3);
+    expect(hints[0]).toContain('No cats configured');
+  });
 });
 
 describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
@@ -200,6 +271,37 @@ describe('PetkitPuramaxCardEditor: cats array add/remove', () => {
     const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
     expect(() => removeBtn.dispatchEvent(new Event('click', { bubbles: true }))).not.toThrow();
     expect(catForms(editor).length).toBe(0);
+  });
+});
+
+describe('PetkitPuramaxCardEditor: hass updates do not rebuild the DOM (scroll/focus regression)', () => {
+  it('keeps the same ha-form node identity across repeated hass assignments', () => {
+    const editor = makeEditor();
+    editor.setConfig(baseConfig());
+    editor.hass = { states: {} };
+    const before = mainForm(editor);
+    const beforeCatForms = catForms(editor);
+
+    // Simulate the real-world pattern this bug came from: `hass` is
+    // reassigned on essentially every state change anywhere in HA, not just
+    // when the user edits this card -- many times in a row, unrelated to
+    // any config change.
+    for (let i = 0; i < 5; i++) {
+      editor.hass = { states: { [`sensor.tick_${i}`]: { state: 'x' } } };
+    }
+
+    expect(mainForm(editor)).toBe(before);
+    expect(catForms(editor)[0]).toBe(beforeCatForms[0]);
+    expect(catForms(editor)[1]).toBe(beforeCatForms[1]);
+  });
+
+  it('still propagates the latest hass onto existing forms', () => {
+    const editor = makeEditor();
+    editor.setConfig(baseConfig());
+    const hass = { states: { 'sensor.foo': { state: 'bar' } } };
+    editor.hass = hass;
+    expect(mainForm(editor).hass).toBe(hass);
+    expect(catForms(editor)[0].hass).toBe(hass);
   });
 });
 

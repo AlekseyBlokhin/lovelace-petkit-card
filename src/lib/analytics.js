@@ -84,6 +84,30 @@ export function summarize(byDay, todayKey) {
 }
 
 /**
+ * Flags a cat as overdue for a litter box visit: no visit in at least
+ * `thresholdHours`, checked against wall-clock time rather than the 7-day
+ * rolling average used by `detectAnomaly()`. This is deliberately an
+ * absolute check, not a relative one -- a gradual multi-day decline drags a
+ * rolling average down with it and can go unnoticed by a percentage-based
+ * comparison, whereas "no visit in N hours" can't drift.
+ *
+ * `lastVisitTs === null` (no visit at all within however far back the
+ * caller looked) always alerts, regardless of `thresholdHours`.
+ *
+ * @param {object} params
+ * @param {number|null} params.lastVisitTs - epoch ms of the most recent visit, or null if none found.
+ * @param {number|Date} params.now
+ * @param {number} params.thresholdHours
+ * @returns {{ alerting: boolean, hoursSince: number|null }}
+ */
+export function detectNoVisitAlert({ lastVisitTs, now, thresholdHours }) {
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  if (lastVisitTs == null) return { alerting: true, hoursSince: null };
+  const hoursSince = (nowMs - lastVisitTs) / 3600000;
+  return { alerting: hoursSince >= thresholdHours, hoursSince };
+}
+
+/**
  * Flags an unusually low or high total for today versus the 7-day average,
  * gated so it doesn't fire on thin history or early in the day (before
  * there's been a fair chance to accumulate a typical day's total).

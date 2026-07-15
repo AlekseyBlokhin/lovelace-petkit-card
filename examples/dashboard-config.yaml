@@ -66,3 +66,12 @@ controls_row:
     entity: sensor.petkit_puramax_state
 
 decline_threshold_pct: 60
+
+# Optional "no visit in N hours" safety alert, per cat. Shows a banner in the
+# card and, if notify_service is set, also pushes a notification the first
+# time a cat crosses the threshold (not on every re-render). Note this only
+# fires while the card itself is loaded in a browser/companion-app tab --
+# pair with a native HA automation if you need a guarantee independent of
+# whether a dashboard is open.
+no_visit_alert_hours: 8
+notify_service: notify.mobile_app_your_phone

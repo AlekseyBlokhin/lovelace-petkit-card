@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -452,6 +452,179 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     expect(rows.length).toBe(1);
     expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+  });
+});
+
+describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-flicker regression)', () => {
+  it('does not add a second row when last_event flickers unavailable and recovers to the same value', async () => {
+    // Real-world pattern: a transient coordinator hiccup marks the entity
+    // unavailable for ~30s, then it "recovers" by re-reporting the exact
+    // same event string it already had -- that recovery is not a new event
+    // and must not become a duplicate Working Records row.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'unavailable', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) + 120 },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 180 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(1);
+    expect(rows.length).toBe(2);
+  });
+
+  it('still shows two separate rows for two genuinely distinct same-text events with no flicker between them', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) + 120 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(2);
+  });
+});
+
+describe('PetkitPuramaxCard: no-visit alert', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pointsWithLastVisit(hoursAgo, now) {
+    const lastVisitMs = now.getTime() - hoursAgo * 3600000;
+    // A day-old baseline reading plus the actual last-visit delta, both
+    // safely inside the 7-day analytics window.
+    const baselineMs = lastVisitMs - 3600000;
+    return [
+      { s: '0', lu: Math.floor(baselineMs / 1000) },
+      { s: '50', lu: Math.floor(lastVisitMs / 1000) },
+    ];
+  }
+
+  it('shows a no-visit banner and notifies once when a cat is overdue past the default 8h threshold', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig({ notify_service: 'notify.mobile_app_test' }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': pointsWithLastVisit(9, now) });
+    card.hass = hass;
+    await flush();
+
+    const banner = card.shadowRoot.querySelector('.no-visit-banner');
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('Cat A');
+    expect(hass.callService).toHaveBeenCalledTimes(1);
+    expect(hass.callService).toHaveBeenCalledWith(
+      'notify',
+      'mobile_app_test',
+      expect.objectContaining({ message: expect.stringContaining('Cat A') }),
+    );
+  });
+
+  it('shows no banner and does not notify when the cat visited within the threshold', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig({ notify_service: 'notify.mobile_app_test' }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': pointsWithLastVisit(2, now) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('.no-visit-banner')).toBeNull();
+    expect(hass.callService).not.toHaveBeenCalled();
+  });
+
+  it('honors a configured no_visit_alert_hours threshold', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig({ no_visit_alert_hours: 1 }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': pointsWithLastVisit(2, now) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('.no-visit-banner')).not.toBeNull();
+  });
+
+  it('shows the banner without ever calling a notify service when none is configured', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': pointsWithLastVisit(9, now) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('.no-visit-banner')).not.toBeNull();
+    expect(hass.callService).not.toHaveBeenCalled();
+  });
+
+  it('does not re-notify on every periodic recheck while still overdue', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig({ notify_service: 'notify.mobile_app_test' }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': pointsWithLastVisit(9, now) });
+    card.hass = hass;
+    await flush();
+    expect(hass.callService).toHaveBeenCalledTimes(1);
+
+    // Advance past two 5-minute periodic rechecks with no new visit.
+    await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+    expect(hass.callService).toHaveBeenCalledTimes(1);
+  });
+
+  it('alerts with "no visits recorded" and notifies when there is no visit at all in the fetched window', async () => {
+    const now = new Date(2026, 6, 15, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig({ notify_service: 'notify.mobile_app_test' }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({});
+    card.hass = hass;
+    await flush();
+
+    const banner = card.shadowRoot.querySelector('.no-visit-banner');
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('no visits recorded yet');
+    expect(hass.callService).toHaveBeenCalledTimes(1);
   });
 });
 
