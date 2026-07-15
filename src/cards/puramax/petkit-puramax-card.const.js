@@ -28,4 +28,4 @@ export const DEFAULT_DECLINE_THRESHOLD_PCT = 60;
 /** Chart layout constants (pixels, in the SVG's own viewBox coordinate space). */
 export const CHART_WIDTH = 600;
 export const CHART_HEIGHT = 240;
-export const CHART_PADDING = { left: 40, right: 10, top: 10, bottom: 26 };
+export const CHART_PADDING = { left: 64, right: 10, top: 10, bottom: 26 };

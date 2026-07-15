@@ -25,16 +25,26 @@ export const CARD_STYLES = `
   .nav-btn:disabled { opacity: 0.3; cursor: default; }
   .day-label { font-weight: 500; color: var(--primary-text-color); min-width: 140px; text-align: center; }
   .chart-wrap { position: relative; }
-  .chart-svg { width: 100%; height: 240px; }
+  /* height:auto (not a fixed px) is deliberate: the SVG's viewBox aspect
+     ratio (CHART_WIDTH:CHART_HEIGHT) doesn't match a typical narrow card's
+     rendered width, so a fixed height here made the browser letterbox the
+     content -- large empty bands above and below the actual chart, inside
+     what looked like a single reserved box. height:auto lets the rendered
+     height follow the viewBox aspect ratio at the actual rendered width, so
+     the element's box always matches its content with no dead space. */
+  .chart-svg { width: 100%; height: auto; display: block; }
   .grid-line-v { stroke: var(--divider-color); stroke-width: 1; }
   .grid-line-h { stroke: var(--divider-color); stroke-width: 1; stroke-dasharray: 2,3; opacity: 0.5; }
-  .axis-label { font-size: 13px; fill: var(--secondary-text-color); text-anchor: middle; font-weight: 500; }
-  .axis-label-y { font-size: 11px; fill: var(--secondary-text-color); text-anchor: end; }
+  /* Font sizes here are in the SVG's viewBox user-units, not CSS px -- at a
+     ~600-unit-wide viewBox rendered into a ~280-320px card, a "13px"/"11px"
+     value here actually rendered around 6px on screen. Sized up so the
+     effective on-screen size reads clearly at typical card widths. */
+  .axis-label { font-size: 26px; fill: var(--secondary-text-color); text-anchor: middle; font-weight: 500; }
+  .axis-label-y { font-size: 20px; fill: var(--secondary-text-color); text-anchor: end; }
   .visit-point { pointer-events: none; }
   .visit-hit { cursor: pointer; pointer-events: stroke; }
   .chart-tooltip { position: absolute; pointer-events: none; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 6px; padding: 4px 8px; font-size: 0.75em; color: var(--primary-text-color); box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap; z-index: 10; opacity: 0; transition: opacity 0.1s; transform: translate(-50%, -110%); }
   .chart-tooltip.visible { opacity: 1; }
-  .analytics-section { margin-top: -8px; }
   .empty-note { text-align: center; color: var(--secondary-text-color); font-size: 0.85em; padding: 8px; }
   .section-title { font-weight: 500; color: var(--primary-text-color); margin-bottom: 4px; font-size: 1em; }
   .usage-section { display: flex; flex-direction: column; gap: 0; }
@@ -51,5 +61,4 @@ export const CARD_STYLES = `
   .cat-analytics td { padding: 2px 4px; }
   .cat-analytics tr:first-child td { color: var(--secondary-text-color); font-size: 0.9em; }
   .warn-banner { display: flex; align-items: center; gap: 8px; background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); color: var(--warning-color); border-radius: 8px; padding: 8px 10px; font-size: 0.85em; margin-bottom: 8px; }
-  .loading { color: var(--secondary-text-color); font-size: 0.85em; padding: 8px; text-align: center; }
 `;
