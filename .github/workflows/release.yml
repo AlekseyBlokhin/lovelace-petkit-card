@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify build output
+        run: |
+          test -s dist/petkit-puramax-card.js || (echo "dist/petkit-puramax-card.js is missing or empty" && exit 1)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/petkit-puramax-card.js
+            dist/petkit-puramax-card.js.map
+            blueprints/automation/petkit_per_cat_visit_tracker.yaml
+          generate_release_notes: true
