@@ -69,6 +69,12 @@ export const CARD_STYLES = `
   .empty-note { text-align: center; color: var(--secondary-text-color); font-size: 0.85em; padding: 8px; }
   .section-title { font-weight: 500; color: var(--primary-text-color); margin-bottom: 4px; font-size: 1em; }
   .usage-section { display: flex; flex-direction: column; gap: 0; }
+  /* Component-internal spacer between the usage line and the chart below it
+     -- deliberately smaller than the 14px ha-card uses between top-level
+     sections (that gap is between sections; this one is within one
+     section, see issue #8). .chart-section itself stays at gap:0 since
+     chart-header's own margin-bottom already spaces it from usage-section. */
+  .chart-area { margin-top: 8px; }
   .usage-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   .stat-value { font-size: 1em; font-weight: 600; color: var(--primary-text-color); }
   .usage-cats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.85em; color: var(--secondary-text-color); justify-content: flex-end; }
