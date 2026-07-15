@@ -305,6 +305,39 @@ describe('PetkitPuramaxCard: rendering', () => {
   it('getCardSize returns a fixed layout size', () => {
     expect(card.getCardSize()).toBe(14);
   });
+
+  it('renders the cat name and color dot inside the analytics table\'s top-left cell, not a separate title line', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    // The old standalone title line is gone...
+    expect(card.shadowRoot.querySelector('.cat-analytics-title')).toBeNull();
+    // ...and the name + dot now live inside the table's first cell.
+    const nameCell = card.shadowRoot.querySelector('.cat-analytics table .cat-name-cell');
+    expect(nameCell).not.toBeNull();
+    expect(nameCell.textContent).toBe('Cat A');
+    expect(nameCell.querySelector('.dot')).not.toBeNull();
+  });
+
+  it('escapes a malicious cat name/color in the analytics table cell (XSS regression)', async () => {
+    card.setConfig(
+      baseConfig({
+        cats: [
+          {
+            name: '<b>evil</b>',
+            color: '"><img src=x onerror=alert(1)>',
+            last_visit_duration_entity: 'input_number.test_cat_a_duration',
+          },
+        ],
+      }),
+    );
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.cat-analytics img')).toBeNull();
+    expect(card.shadowRoot.querySelector('.cat-analytics b')).toBeNull();
+    const nameCell = card.shadowRoot.querySelector('.cat-name-cell');
+    expect(nameCell.textContent).toBe('<b>evil</b>');
+  });
 });
 
 describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {
