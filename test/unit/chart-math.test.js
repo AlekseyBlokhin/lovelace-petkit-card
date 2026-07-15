@@ -78,10 +78,10 @@ describe('buildGridLines', () => {
   const width = 600;
   const height = 240;
 
-  it('produces exactly 5 vertical lines at 0/6/12/18/24h', () => {
+  it('produces exactly 5 vertical lines at 4/8/12/16/20h in zero-padded HH:00 format, skipping 0/24h', () => {
     const { vertical } = buildGridLines({ niceMax: 150, yStep: 30, width, height, padding });
-    expect(vertical.map((v) => v.hour)).toEqual([0, 6, 12, 18, 24]);
-    expect(vertical.map((v) => v.label)).toEqual(['0h', '6h', '12h', '18h', '24h']);
+    expect(vertical.map((v) => v.hour)).toEqual([4, 8, 12, 16, 20]);
+    expect(vertical.map((v) => v.label)).toEqual(['04:00', '08:00', '12:00', '16:00', '20:00']);
   });
 
   it('vertical line x positions are monotonically increasing', () => {
@@ -91,10 +91,10 @@ describe('buildGridLines', () => {
     }
   });
 
-  it('produces horizontal lines from 0 to niceMax inclusive, spaced by yStep', () => {
+  it('produces horizontal lines from 0 to niceMax inclusive, spaced by yStep, labeled in MM\'SS" format', () => {
     const { horizontal } = buildGridLines({ niceMax: 150, yStep: 30, width, height, padding });
     expect(horizontal.map((h) => h.value)).toEqual([0, 30, 60, 90, 120, 150]);
-    expect(horizontal.map((h) => h.label)).toEqual(['0s', '30s', '60s', '90s', '120s', '150s']);
+    expect(horizontal.map((h) => h.label)).toEqual(["00'00\"", "00'30\"", "01'00\"", "01'30\"", "02'00\"", "02'30\""]);
   });
 
   it('horizontal line y positions decrease as value increases (higher value = higher on screen)', () => {
