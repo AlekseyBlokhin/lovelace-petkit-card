@@ -14,17 +14,16 @@
  * directly to a nested object.
  */
 
+// `name` must exactly match this cat's value as reported by
+// `device_entities.last_used_by` (e.g. the PetKit integration's "Last used
+// by" sensor) -- that's how the card attributes reconstructed visits back
+// to a specific cat, with no per-cat helper entity needed.
 const CAT_SCHEMA = [
   { name: 'name', label: 'Name', selector: { text: {} } },
   { name: 'color', label: 'Color', selector: { text: {} } },
-  {
-    name: 'last_visit_duration_entity',
-    label: 'Last visit duration entity',
-    selector: { entity: { domain: 'input_number' } },
-  },
 ];
 
-const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7', last_visit_duration_entity: '' };
+const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7' };
 
 // `value_map` (mapping a raw entity state to a display string) has no clean
 // ha-form widget for an arbitrary object-of-strings, so it stays YAML-only
@@ -79,6 +78,16 @@ const MAIN_SCHEMA = [
     type: 'expandable',
     title: 'Device entities',
     schema: [
+      {
+        name: 'device_entities_total_use',
+        label: 'Total use sensor (required)',
+        selector: { entity: {} },
+      },
+      {
+        name: 'device_entities_last_used_by',
+        label: 'Last used by sensor (required if more than one cat)',
+        selector: { entity: {} },
+      },
       { name: 'device_entities_error', label: 'Error sensor', selector: { entity: {} } },
       { name: 'device_entities_last_event', label: 'Last event sensor', selector: { entity: {} } },
       { name: 'device_entities_state', label: 'State sensor', selector: { entity: {} } },
@@ -126,6 +135,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     const de = cfg.device_entities || {};
     return {
       title: cfg.title,
+      device_entities_total_use: de.total_use,
+      device_entities_last_used_by: de.last_used_by,
       device_entities_error: de.error,
       device_entities_last_event: de.last_event,
       device_entities_state: de.state,
@@ -138,6 +149,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     cfg.title = flatValue.title;
     cfg.device_entities = {
       ...(cfg.device_entities || {}),
+      total_use: flatValue.device_entities_total_use,
+      last_used_by: flatValue.device_entities_last_used_by,
       error: flatValue.device_entities_error,
       last_event: flatValue.device_entities_last_event,
       state: flatValue.device_entities_state,

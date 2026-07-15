@@ -2,14 +2,16 @@
 # README.md's configuration reference. Every entity id below is a
 # placeholder — replace them with your own PETKIT PURAMAX entities.
 #
-# See README.md for the full field-by-field reference, and the
-# `blueprints/automation/petkit_per_cat_visit_tracker.yaml` Blueprint for
-# how to populate each cat's `last_visit_duration_entity`.
+# See README.md's "How per-cat visit reconstruction works" section for how
+# total_use/last_used_by are turned into per-cat visit history -- no helper
+# entities or companion automation needed.
 
 type: custom:petkit-puramax-card
 title: PETKIT PURAMAX
 
 device_entities:
+  total_use: sensor.petkit_puramax_total_use
+  last_used_by: sensor.petkit_puramax_last_used_by
   error: sensor.petkit_puramax_error
   last_event: sensor.petkit_puramax_last_event
   state: sensor.petkit_puramax_state
@@ -22,12 +24,12 @@ event_labels:
   auto_cleaning_completed: Auto cleaning done
 
 cats:
+  # name must exactly match this cat's value as reported by
+  # device_entities.last_used_by.
   - name: Whiskers
     color: "#4fc3f7"
-    last_visit_duration_entity: input_number.whiskers_last_visit_duration
   - name: Mittens
     color: "#ff8a65"
-    last_visit_duration_entity: input_number.mittens_last_visit_duration
 
 info_row:
   - entity: sensor.petkit_puramax_consumable_remaining

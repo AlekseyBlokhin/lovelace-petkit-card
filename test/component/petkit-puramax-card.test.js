@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PetkitPuramaxCard } from '../../src/cards/puramax/petkit-puramax-card.js';
+import { dayBounds } from '../../src/lib/day.js';
 
 if (!customElements.get('petkit-puramax-card')) {
   customElements.define('petkit-puramax-card', PetkitPuramaxCard);
@@ -12,11 +13,12 @@ function baseConfig(overrides = {}) {
   return {
     type: 'custom:petkit-puramax-card',
     device_entities: {
+      total_use: 'sensor.test_petkit_total_use',
       error: 'sensor.test_petkit_error',
       last_event: 'sensor.test_petkit_last_event',
       state: 'sensor.test_petkit_state',
     },
-    cats: [{ name: 'Cat A', color: '#111111', last_visit_duration_entity: 'input_number.test_cat_a_duration' }],
+    cats: [{ name: 'Cat A', color: '#111111' }],
     ...overrides,
   };
 }
@@ -67,33 +69,57 @@ describe('PetkitPuramaxCard: setConfig validation', () => {
     );
   });
 
+  it('throws a specific error when device_entities.total_use is missing', () => {
+    const card = makeCard();
+    const cfg = baseConfig();
+    delete cfg.device_entities.total_use;
+    expect(() => card.setConfig(cfg)).toThrow('petkit-puramax-card: "device_entities.total_use" is required in config');
+  });
+
   it('throws a specific error naming the missing cat field: name', () => {
     const card = makeCard();
-    const cfg = baseConfig({ cats: [{ color: '#fff', last_visit_duration_entity: 'input_number.x' }] });
+    const cfg = baseConfig({ cats: [{ color: '#fff' }] });
     expect(() => card.setConfig(cfg)).toThrow('cats[0].name is required');
   });
 
   it('throws a specific error naming the missing cat field: color', () => {
     const card = makeCard();
-    const cfg = baseConfig({ cats: [{ name: 'A', last_visit_duration_entity: 'input_number.x' }] });
+    const cfg = baseConfig({ cats: [{ name: 'A' }] });
     expect(() => card.setConfig(cfg)).toThrow('cats[0].color is required');
-  });
-
-  it('throws a specific error naming the missing cat field: last_visit_duration_entity', () => {
-    const card = makeCard();
-    const cfg = baseConfig({ cats: [{ name: 'A', color: '#fff' }] });
-    expect(() => card.setConfig(cfg)).toThrow('cats[0].last_visit_duration_entity is required');
   });
 
   it('identifies the correct index for a later invalid cat', () => {
     const card = makeCard();
     const cfg = baseConfig({
+      device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
       cats: [
-        { name: 'A', color: '#fff', last_visit_duration_entity: 'input_number.a' },
-        { name: 'B', color: '#000' },
+        { name: 'A', color: '#fff' },
+        { name: 'B' },
       ],
     });
-    expect(() => card.setConfig(cfg)).toThrow('cats[1].last_visit_duration_entity is required');
+    expect(() => card.setConfig(cfg)).toThrow('cats[1].color is required');
+  });
+
+  it('does not require device_entities.last_used_by with a single cat', () => {
+    const card = makeCard();
+    expect(() => card.setConfig(baseConfig())).not.toThrow();
+  });
+
+  it('throws a specific error when device_entities.last_used_by is missing with more than one cat', () => {
+    const card = makeCard();
+    const cfg = baseConfig({ cats: [{ name: 'A', color: '#fff' }, { name: 'B', color: '#000' }] });
+    expect(() => card.setConfig(cfg)).toThrow(
+      'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured',
+    );
+  });
+
+  it('accepts a valid multi-cat config once last_used_by is set', () => {
+    const card = makeCard();
+    const cfg = baseConfig({
+      device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
+      cats: [{ name: 'A', color: '#fff' }, { name: 'B', color: '#000' }],
+    });
+    expect(() => card.setConfig(cfg)).not.toThrow();
   });
 
   it('accepts a fully valid config without throwing', () => {
@@ -111,7 +137,7 @@ describe('PetkitPuramaxCard: getStubConfig', () => {
 
   it('uses obviously-placeholder entity ids, not real device data', () => {
     const stub = PetkitPuramaxCard.getStubConfig();
-    expect(stub.cats[0].last_visit_duration_entity).toContain('example');
+    expect(stub.device_entities.total_use).toContain('example');
   });
 });
 
@@ -326,7 +352,6 @@ describe('PetkitPuramaxCard: rendering', () => {
           {
             name: '<b>evil</b>',
             color: '"><img src=x onerror=alert(1)>',
-            last_visit_duration_entity: 'input_number.test_cat_a_duration',
           },
         ],
       }),
@@ -340,7 +365,9 @@ describe('PetkitPuramaxCard: rendering', () => {
   });
 
   it('Analytics "Duration" row shows the weighted average visit duration, not the total (refs #10)', async () => {
-    // Two synthetic past days for the cat's last_visit_duration entity:
+    // Two synthetic past days for the device's total_use counter (a
+    // cumulative running total, not a per-visit value -- consecutive-point
+    // deltas are the reconstructed visit durations):
     //  - yesterday: one 100s visit (that day's own average = 100)
     //  - 2 days ago: four 10s visits, total 40s (that day's own average = 10)
     // A "total" row would show 1m10s (100+40) for 3d/7d avg; a naive
@@ -355,16 +382,20 @@ describe('PetkitPuramaxCard: rendering', () => {
     twoDaysAgo9am.setHours(9, 0, 0, 0);
 
     const points = [
-      { s: '100', lu: Math.floor(yesterday9am.getTime() / 1000) },
-      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) },
+      // 2 days ago: counter resets to 0, then four +10 deltas.
+      { s: '0', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) },
       { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 60 },
-      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 120 },
-      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 180 },
+      { s: '20', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 120 },
+      { s: '30', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 180 },
+      { s: '40', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 240 },
+      // yesterday: counter resets to 0, then one +100 delta.
+      { s: '0', lu: Math.floor(yesterday9am.getTime() / 1000) },
+      { s: '100', lu: Math.floor(yesterday9am.getTime() / 1000) + 60 },
     ];
 
     card.setConfig(baseConfig());
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
-    hass.callWS = vi.fn().mockResolvedValue({ 'input_number.test_cat_a_duration': points });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': points });
     card.hass = hass;
     await flush();
 
@@ -472,6 +503,81 @@ describe('PetkitPuramaxCard: chart axis labels (HTML overlay, not SVG text)', ()
     await flush();
     const hLine = card.shadowRoot.querySelector('.grid-line-h');
     expect(hLine.getAttribute('stroke-dasharray')).toBeNull();
+  });
+});
+
+describe('PetkitPuramaxCard: multi-cat visit reconstruction (total_use + last_used_by)', () => {
+  it('attributes chart stems to the correct cat via carry-forward, including a same-cat repeat visit with no last_used_by change', async () => {
+    const { start } = dayBounds(0);
+    const t = (mins) => Math.floor((start.getTime() + mins * 60000) / 1000);
+
+    const cfg = baseConfig({
+      device_entities: {
+        ...baseConfig().device_entities,
+        last_used_by: 'sensor.test_petkit_last_used_by',
+      },
+      cats: [
+        { name: 'Sky', color: '#111111' },
+        { name: 'Deya', color: '#222222' },
+      ],
+    });
+    const card = makeCard();
+    card.setConfig(cfg);
+
+    const totalUsePoints = [
+      { s: '0', lu: t(0) },
+      { s: '50', lu: t(10) }, // Sky (exact last_used_by match)
+      { s: '80', lu: t(20) }, // Sky again -- no last_used_by change to match
+      { s: '100', lu: t(30) }, // Deya (exact last_used_by match)
+    ];
+    const lastUsedByPoints = [
+      { s: 'Sky', lu: t(10) },
+      { s: 'Deya', lu: t(30) },
+    ];
+
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_used_by')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_used_by': lastUsedByPoints });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const usageBody = card.shadowRoot.getElementById('usage-body');
+    expect(usageBody.textContent).toContain('3 times');
+    expect(usageBody.textContent).toContain('Sky: 2');
+    expect(usageBody.textContent).toContain('Deya: 1');
+
+    const stems = card.shadowRoot.querySelectorAll('.visit-point');
+    expect(stems.length).toBe(3);
+  });
+
+  it('with a single cat, every visit is attributed without ever fetching last_used_by', async () => {
+    const card = makeCard();
+    card.setConfig(baseConfig());
+
+    const totalUsePoints = [
+      { s: '0', lu: Math.floor(dayBounds(0).start.getTime() / 1000) },
+      { s: '50', lu: Math.floor(dayBounds(0).start.getTime() / 1000) + 600 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      expect(req.entity_ids).not.toContain('sensor.test_petkit_last_used_by');
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const usageBody = card.shadowRoot.getElementById('usage-body');
+    expect(usageBody.textContent).toContain('1 time');
   });
 });
 

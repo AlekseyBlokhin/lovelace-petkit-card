@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildHistoryRequest, parseHistoryPoint, pointsToEvents } from '../../src/lib/history.js';
+import {
+  buildHistoryRequest,
+  parseHistoryPoint,
+  pointsToEvents,
+  deltaEvents,
+  catChangeEvents,
+  attributeCats,
+} from '../../src/lib/history.js';
 
 describe('buildHistoryRequest', () => {
   it('REGRESSION: always sets include_start_time_state to false', () => {
@@ -14,6 +21,20 @@ describe('buildHistoryRequest', () => {
       entityIds: ['input_number.example'],
     });
     expect(req.include_start_time_state).toBe(false);
+  });
+
+  it('accepts includeStartTimeState:true for identity/label sensors that need a carry-forward baseline', () => {
+    // The one legitimate exception to the rule above: a sensor queried only
+    // for carry-forward attribution (e.g. "which cat used it last"), never
+    // charted as an event itself, where the synthetic start-of-window point
+    // IS the desired baseline rather than a phantom event.
+    const req = buildHistoryRequest({
+      startTime: new Date(2026, 6, 15),
+      endTime: new Date(2026, 6, 16),
+      entityIds: ['sensor.example'],
+      includeStartTimeState: true,
+    });
+    expect(req.include_start_time_state).toBe(true);
   });
 
   it('sets the correct WS message type', () => {
@@ -131,5 +152,181 @@ describe('pointsToEvents', () => {
 
   it('returns an empty array for an empty history', () => {
     expect(pointsToEvents([])).toEqual([]);
+  });
+});
+
+describe('deltaEvents', () => {
+  it('computes the delta between consecutive readings as each event\'s value', () => {
+    const hist = [
+      { s: '100', lu: 1000 },
+      { s: '150', lu: 2000 },
+      { s: '210', lu: 3000 },
+    ];
+    expect(deltaEvents(hist)).toEqual([
+      { value: 50, ts: 2000000 },
+      { value: 60, ts: 3000000 },
+    ]);
+  });
+
+  it('filters out a daily counter reset (large negative delta) by default', () => {
+    const hist = [
+      { s: '900', lu: 1000 },
+      { s: '0', lu: 2000 },
+      { s: '119', lu: 3000 },
+    ];
+    expect(deltaEvents(hist)).toEqual([{ value: 119, ts: 3000000 }]);
+  });
+
+  it('filters out deltas at or above maxDelta (e.g. a multi-hour offline gap)', () => {
+    const hist = [
+      { s: '0', lu: 1000 },
+      { s: '5000', lu: 2000 },
+      { s: '5030', lu: 3000 },
+    ];
+    expect(deltaEvents(hist, { maxDelta: 1800 })).toEqual([{ value: 30, ts: 3000000 }]);
+  });
+
+  it('drops unavailable/unparseable points before computing deltas, so a transient blip does not corrupt the surrounding delta', () => {
+    // REGRESSION (real device behavior, verified against live PetKit history):
+    // a coordinator hiccup writes "unavailable" then re-resolves to the SAME
+    // value, unrelated to any real visit. If that "unavailable" point were
+    // diffed against instead of skipped, it would either throw off the delta
+    // or introduce a spurious near-zero event.
+    const hist = [
+      { s: '119', lu: 1000 },
+      { s: 'unavailable', lu: 1500 },
+      { s: '119', lu: 2000 },
+      { s: '252', lu: 3000 },
+    ];
+    expect(deltaEvents(hist)).toEqual([{ value: 133, ts: 3000000 }]);
+  });
+
+  it('sorts input by timestamp before diffing, regardless of arrival order', () => {
+    const hist = [
+      { s: '210', lu: 3000 },
+      { s: '100', lu: 1000 },
+      { s: '150', lu: 2000 },
+    ];
+    expect(deltaEvents(hist)).toEqual([
+      { value: 50, ts: 2000000 },
+      { value: 60, ts: 3000000 },
+    ]);
+  });
+
+  it('returns an empty array when fewer than 2 points are available', () => {
+    expect(deltaEvents([{ s: '100', lu: 1000 }])).toEqual([]);
+    expect(deltaEvents([])).toEqual([]);
+    expect(deltaEvents(undefined)).toEqual([]);
+  });
+});
+
+describe('catChangeEvents', () => {
+  it('keeps only points whose state is a known cat name', () => {
+    const hist = [
+      { s: 'no_record_yet', lu: 1000 },
+      { s: 'Sky', lu: 2000 },
+      { s: 'unavailable', lu: 2500 },
+      { s: 'Deya', lu: 3000 },
+    ];
+    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([
+      { cat: 'Sky', ts: 2000000 },
+      { cat: 'Deya', ts: 3000000 },
+    ]);
+  });
+
+  it('drops device placeholder states even if not explicitly named (anything not a known cat)', () => {
+    const hist = [{ s: 'no_record_yet', lu: 1000 }];
+    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([]);
+  });
+
+  it('sorts output by timestamp', () => {
+    const hist = [
+      { s: 'Deya', lu: 3000 },
+      { s: 'Sky', lu: 1000 },
+    ];
+    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([
+      { cat: 'Sky', ts: 1000000 },
+      { cat: 'Deya', ts: 3000000 },
+    ]);
+  });
+
+  it('returns an empty array for missing/non-array input', () => {
+    expect(catChangeEvents(undefined, ['Sky'])).toEqual([]);
+    expect(catChangeEvents(null, ['Sky'])).toEqual([]);
+  });
+});
+
+describe('attributeCats', () => {
+  it('attributes an event to the most recent cat-change event at or before its timestamp', () => {
+    const durationEvents = [{ value: 50, ts: 2000 }];
+    const catEvents = [{ cat: 'Sky', ts: 1000 }];
+    expect(attributeCats(durationEvents, catEvents)).toEqual([{ value: 50, ts: 2000, cat: 'Sky' }]);
+  });
+
+  it('carries the cat forward across events with NO matching change event (same cat visits twice in a row)', () => {
+    // REGRESSION: this is the core reason attribution can't be an
+    // exact-timestamp match. Most PetKit integrations don't emit a new
+    // "last used by" state when the same cat visits again immediately, so
+    // the second visit has no cat-change event of its own -- it must carry
+    // forward the last known value.
+    const durationEvents = [
+      { value: 46, ts: 1000 },
+      { value: 59, ts: 2000 },
+      { value: 27, ts: 2100 },
+    ];
+    const catEvents = [{ cat: 'Sky', ts: 900 }];
+    expect(attributeCats(durationEvents, catEvents)).toEqual([
+      { value: 46, ts: 1000, cat: 'Sky' },
+      { value: 59, ts: 2000, cat: 'Sky' },
+      { value: 27, ts: 2100, cat: 'Sky' },
+    ]);
+  });
+
+  it('attributes events with no preceding cat-change event to null (unknown -- nothing to carry forward)', () => {
+    const durationEvents = [{ value: 50, ts: 500 }];
+    const catEvents = [{ cat: 'Sky', ts: 1000 }];
+    expect(attributeCats(durationEvents, catEvents)).toEqual([{ value: 50, ts: 500, cat: null }]);
+  });
+
+  it('switches attribution forward as soon as a later cat-change event is reached', () => {
+    const durationEvents = [
+      { value: 10, ts: 1000 },
+      { value: 20, ts: 3000 },
+    ];
+    const catEvents = [
+      { cat: 'Sky', ts: 500 },
+      { cat: 'Deya', ts: 2000 },
+    ];
+    expect(attributeCats(durationEvents, catEvents)).toEqual([
+      { value: 10, ts: 1000, cat: 'Sky' },
+      { value: 20, ts: 3000, cat: 'Deya' },
+    ]);
+  });
+
+  it('REGRESSION: reproduces a real captured sequence (mixed exact-match and carry-forward visits)', () => {
+    // Taken from a live PetKit PURAMAX's total_use/last_used_by history over
+    // one day: some visits land an exact-timestamp cat-change event, others
+    // (same cat repeating) don't and must carry forward.
+    const durationEvents = [
+      { value: 119, ts: 1000 }, // Sky (exact)
+      { value: 133, ts: 2000 }, // Sky (carry-forward, no change event)
+      { value: 34, ts: 3000 }, // Deya (exact)
+      { value: 46, ts: 4000 }, // Sky (exact)
+      { value: 59, ts: 5000 }, // Sky (carry-forward)
+      { value: 27, ts: 5100 }, // Sky (carry-forward, 100ms later)
+    ];
+    const catEvents = [
+      { cat: 'Sky', ts: 1000 },
+      { cat: 'Deya', ts: 3000 },
+      { cat: 'Sky', ts: 4000 },
+    ];
+    expect(attributeCats(durationEvents, catEvents).map((e) => e.cat)).toEqual([
+      'Sky',
+      'Sky',
+      'Deya',
+      'Sky',
+      'Sky',
+      'Sky',
+    ]);
   });
 });

@@ -34,5 +34,4 @@ jobs:
           files: |
             dist/petkit-puramax-card.js
             dist/petkit-puramax-card.js.map
-            blueprints/automation/petkit_per_cat_visit_tracker.yaml
           generate_release_notes: true

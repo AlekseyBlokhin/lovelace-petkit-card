@@ -10,14 +10,16 @@ function baseConfig(overrides = {}) {
     type: 'custom:petkit-puramax-card',
     title: 'My Litter Box',
     device_entities: {
+      total_use: 'sensor.total_use',
+      last_used_by: 'sensor.last_used_by',
       error: 'sensor.error',
       last_event: 'sensor.last_event',
       state: 'sensor.state',
     },
     decline_threshold_pct: 55,
     cats: [
-      { name: 'Cat A', color: '#111', last_visit_duration_entity: 'input_number.a' },
-      { name: 'Cat B', color: '#222', last_visit_duration_entity: 'input_number.b' },
+      { name: 'Cat A', color: '#111' },
+      { name: 'Cat B', color: '#222' },
     ],
     info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }],
     controls_row: [{ name: 'Start', icon: 'mdi:play', action: 'press', entity: 'button.start' }],
@@ -62,6 +64,8 @@ describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
     expect(form).not.toBeNull();
     expect(form.data).toEqual({
       title: 'My Litter Box',
+      device_entities_total_use: 'sensor.total_use',
+      device_entities_last_used_by: 'sensor.last_used_by',
       device_entities_error: 'sensor.error',
       device_entities_last_event: 'sensor.last_event',
       device_entities_state: 'sensor.state',
@@ -108,6 +112,8 @@ describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
 
     fireValueChanged(mainForm(editor), {
       title: 'New Title',
+      device_entities_total_use: 'sensor.total_use',
+      device_entities_last_used_by: 'sensor.last_used_by',
       device_entities_error: 'sensor.new_error',
       device_entities_last_event: 'sensor.last_event',
       device_entities_state: 'sensor.state',
@@ -118,6 +124,8 @@ describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
     const { config } = listener.mock.calls[0][0].detail;
     expect(config.title).toBe('New Title');
     expect(config.device_entities).toEqual({
+      total_use: 'sensor.total_use',
+      last_used_by: 'sensor.last_used_by',
       error: 'sensor.new_error',
       last_event: 'sensor.last_event',
       state: 'sensor.state',
@@ -149,7 +157,7 @@ describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
     const listener = vi.fn();
     editor.addEventListener('config-changed', listener);
     const forms = catForms(editor);
-    fireValueChanged(forms[1], { name: 'Renamed', color: '#222', last_visit_duration_entity: 'input_number.b' });
+    fireValueChanged(forms[1], { name: 'Renamed', color: '#222' });
     const { config } = listener.mock.calls[0][0].detail;
     expect(config.cats[0]).toEqual(baseConfig().cats[0]);
     expect(config.cats[1].name).toBe('Renamed');
@@ -188,7 +196,7 @@ describe('PetkitPuramaxCardEditor: cats array add/remove', () => {
   });
 
   it('does not throw when removing down to zero cats', () => {
-    editor.setConfig(baseConfig({ cats: [{ name: 'Only', color: '#fff', last_visit_duration_entity: 'input_number.x' }] }));
+    editor.setConfig(baseConfig({ cats: [{ name: 'Only', color: '#fff' }] }));
     const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
     expect(() => removeBtn.dispatchEvent(new Event('click', { bubbles: true }))).not.toThrow();
     expect(catForms(editor).length).toBe(0);

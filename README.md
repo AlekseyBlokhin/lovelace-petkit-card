@@ -6,8 +6,10 @@
 
 A Home Assistant Lovelace custom card for PETKIT smart litter boxes: device
 status, controls, and per-cat visit analytics — computed entirely
-client-side from plain `input_number` entity history, no accumulator or
-`statistics` helper entities required.
+client-side from the device's own `total_use` and `last_used_by` sensor
+history. No helper entities and no companion automation are needed at all;
+the card reconstructs every visit's duration and cat identity straight from
+sensors your PetKit integration already provides.
 
 <!-- screenshot placeholder: add a real screenshot here after the first install -->
 
@@ -16,9 +18,9 @@ client-side from plain `input_number` entity history, no accumulator or
 - Device status chips and control buttons, both fully config-driven
   (`info_row` / `controls_row` arrays — add, remove, or reorder them purely
   in YAML, no code changes).
-- A day-switchable per-cat visit chart (a 0-24h "stem plot"), built from
-  each cat's own `last_visit_duration` `input_number` history — no
-  accumulator entities needed.
+- A day-switchable per-cat visit chart (a 0-24h "stem plot"), reconstructed
+  from the device's `total_use`/`last_used_by` sensors — no per-cat helper
+  entities needed.
 - A merged Working Records timeline (visits + device events).
 - Today / 3-day-avg / 7-day-avg per-cat analytics, with a decline/spike
   warning banner.
@@ -28,7 +30,7 @@ client-side from plain `input_number` entity history, no accumulator or
 ## Prerequisites
 
 - **A PetKit Home Assistant integration**, already installed and configured, exposing your device's entities — either [`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit) or [`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit). This card only reads entities; it doesn't talk to PetKit's API itself, and doesn't care which of the two integrations provided them.
-- **One `input_number` helper per cat** (`Settings → Devices & Services → Helpers → Create Helper → Number`), which the automation Blueprint below writes into and the card reads history from.
+- **No helper entities and no companion automation.** The card reads directly from your integration's own "total use" and (if you have more than one cat) "last used by" sensors.
 - **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — built only on Home Assistant's own built-in `ha-form`/`ha-icon` elements, zero runtime npm dependencies (`package.json` has none). You don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
 
 ## Installation
@@ -78,14 +80,15 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `type` | yes | string | — | Must be `custom:petkit-puramax-card`. |
 | `title` | no | string | `"PETKIT PURAMAX"` | Card header title. |
 | `device_entities` | yes | object | — | See below. |
+| `device_entities.total_use` | yes | entity id | — | The sensor that bumps by one visit's duration on every use (shared across all cats, e.g. PetKit's "Total use"). Its history is the data source for every visit's duration, for all cats combined. |
+| `device_entities.last_used_by` | required if >1 cat | entity id | — | The sensor reporting which cat used the box most recently (e.g. PetKit's "Last used by"). Only needed to disambiguate cats when there's more than one — with a single cat every visit is trivially theirs. |
 | `device_entities.error` | no | entity id | — | Sensor reporting the device's current error/status code. |
 | `device_entities.last_event` | no | entity id | — | Sensor reporting the device's most recent maintenance/cleaning event. |
 | `device_entities.state` | no | entity id | — | Sensor reporting the device's current operating state (used by the `toggle_maintenance` control action). |
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Lets you relabel or add event states without editing the card. Set a state's value to `null` to hide it from Working Records entirely — see note below. YAML-only — no visual editor field. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See below. |
-| `cats[].name` | yes | string | — | Display name. |
+| `cats[].name` | yes | string | — | Display name. Must exactly match this cat's value as reported by `device_entities.last_used_by` — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
 | `cats[].color` | yes | string (CSS color) | — | Chart/legend color for this cat. |
-| `cats[].last_visit_duration_entity` | yes | entity id (`input_number`) | — | This cat's per-visit duration source. Its own state *history* is the data source for both the chart and the analytics — see the companion automation Blueprint (documented further down) for how to populate it. |
 | `info_row` | no | array | `[]` | Status chips, in order. See below. |
 | `info_row[].entity` | yes | entity id | — | Entity whose state is displayed. |
 | `info_row[].name` | no | string | entity id | Chip label. |
@@ -115,37 +118,32 @@ Records entirely — this is the general mechanism for filtering out noisy
 states (the defaults already hide `no_events_yet`, `unavailable`, and
 `unknown` this way).
 
-## Automation Blueprint: per-cat visit tracking
+## How per-cat visit reconstruction works
 
-Each `cats[].last_visit_duration_entity` needs *something* to write a
-per-visit duration into that `input_number` — the card itself is entirely
-read-only against history. The included Blueprint does that: it watches a
-shared "total use" sensor, waits briefly for the device's "last used by"
-sensor to settle (see the race-condition note below), and writes the
-computed delta into the matching cat's `input_number`. This replaces
-hand-authoring that logic as a one-off automation.
+There's no helper entity and no companion automation to set up — the card
+derives every visit's duration and cat identity purely from history it
+already fetches:
 
-[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAlekseyBlokhin%2Flovelace-petkit-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpetkit_per_cat_visit_tracker.yaml)
+1. **Duration**: `device_entities.total_use` is a running counter that
+   bumps by one visit's duration on every use. The delta between
+   consecutive history readings *is* that visit's duration. Non-positive or
+   implausibly large deltas (a daily counter reset, or a multi-hour gap from
+   the device having been offline) are filtered out rather than read as a
+   real visit.
+2. **Identity** (only fetched/needed with more than one cat):
+   `device_entities.last_used_by` reports which cat used the box most
+   recently, but most PetKit integrations only write a *new* state when the
+   identity actually changes — two visits by the same cat in a row don't
+   produce a second history point. The card attributes each duration event
+   to whichever cat was most recently reported *at or before* that event's
+   timestamp (carry-forward), which correctly handles repeat visits by the
+   same cat without needing an exact-timestamp match.
 
-Or manually: **Settings → Automations & Scenes → Blueprints → Import
-Blueprint**, paste
-`https://github.com/AlekseyBlokhin/lovelace-petkit-card/blob/main/blueprints/automation/petkit_per_cat_visit_tracker.yaml`,
-then create one automation from it per litter box.
-
-### Blueprint inputs
-
-| Input | Description |
-|---|---|
-| **Total Use sensor** | The sensor that bumps by one visit's duration on every use (shared across all cats). |
-| **Last Used By sensor** | The sensor reporting which cat used the box most recently. |
-| **Cat name to duration helper mapping** | One row per cat: *Cat name* must exactly match this cat's value as reported by the Last Used By sensor; *Duration helper* is the `input_number` (one of your `cats[].last_visit_duration_entity` values) this cat's visit duration gets written to. This is a variable-length list (an `object` selector with `multiple: true`), not a fixed number of cat slots — add as many rows as you have cats. |
-| **Settle delay** (default 3s) | How long to wait after Total Use changes before reading Last Used By. Some PetKit integrations report these as two separate state-changed events from the same event, and Last Used By can lag Total Use by up to ~1s — reading it too early risks crediting a visit to the *previous* cat. |
-| **Max valid visit duration** (default 1800s) | Deltas above this (or non-positive, e.g. the device's own midnight counter reset) are ignored rather than recorded as a visit. |
-
-The Blueprint runs in `queued` mode so back-to-back visits from different
-cats aren't dropped, and binds every `!input` a template needs to a
-`variables:` entry first — `!input` is a YAML tag, not a template value,
-and can't be referenced directly inside `{{ }}`.
+Because this only ever reads already-settled history (never live state at
+the instant of a visit), there's no race condition to guard against — that
+was a real problem for the automation-based approach this replaced, where
+`last_used_by` could still be updating from a previous visit at the exact
+moment a new one was read live.
 
 ## Supported devices
 

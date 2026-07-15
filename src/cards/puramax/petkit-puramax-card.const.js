@@ -31,6 +31,15 @@ export const DEFAULT_TITLE = 'PETKIT PURAMAX';
 /** Default decline/spike alert threshold, as a percent (0-100). */
 export const DEFAULT_DECLINE_THRESHOLD_PCT = 60;
 
+/**
+ * Upper bound (seconds) on a plausible single-visit duration, used when
+ * reconstructing visits from a device's cumulative "total use" counter.
+ * Deltas at or above this (e.g. a multi-hour gap from the device having
+ * been offline) are treated as not a real single visit rather than an
+ * implausibly long one.
+ */
+export const MAX_VALID_VISIT_SECONDS = 1800;
+
 /** Chart layout constants (pixels, in the SVG's own viewBox coordinate space). */
 export const CHART_WIDTH = 600;
 export const CHART_HEIGHT = 240;

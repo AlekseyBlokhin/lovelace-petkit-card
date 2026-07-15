@@ -1,6 +1,6 @@
 import { formatDuration, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import { buildHistoryRequest, pointsToEvents } from '../../lib/history.js';
+import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
@@ -10,6 +10,7 @@ import {
   DEFAULT_TITLE,
   DEFAULT_EVENT_LABELS,
   DEFAULT_DECLINE_THRESHOLD_PCT,
+  MAX_VALID_VISIT_SECONDS,
   CHART_WIDTH,
   CHART_HEIGHT,
   CHART_PADDING,
@@ -19,8 +20,12 @@ import {
  * PETKIT PURAMAX litter box card: device status, controls, a day-switchable
  * per-cat visit chart, a Working Records timeline, and today/3d-avg/7d-avg
  * analytics with a decline/spike warning. All per-cat analytics are derived
- * client-side from a single history query per cat's `last_visit_duration`
- * entity — no accumulator/statistics helper entities needed.
+ * client-side from the device's own `total_use` (a running counter that
+ * bumps by one visit's duration on every use) and, when there's more than
+ * one cat, `last_used_by` (which cat used it most recently) sensors — no
+ * accumulator/statistics/per-cat helper entities needed. See
+ * `_reconstructVisits()` for how a duration+identity per visit is derived
+ * from those two generic sensors.
  *
  * DOM/lifecycle only — all math lives in `src/lib/*`.
  */
@@ -41,12 +46,12 @@ export class PetkitPuramaxCard extends HTMLElement {
         error: 'sensor.example_petkit_error',
         last_event: 'sensor.example_petkit_last_event',
         state: 'sensor.example_petkit_state',
+        total_use: 'sensor.example_petkit_total_use',
       },
       cats: [
         {
           name: 'Example Cat',
           color: '#4fc3f7',
-          last_visit_duration_entity: 'input_number.example_cat_last_visit_duration',
         },
       ],
     };
@@ -59,11 +64,22 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!config.device_entities) {
       throw new Error('petkit-puramax-card: "device_entities" is required in config');
     }
+    if (!config.device_entities.total_use) {
+      throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config');
+    }
     if (!config.cats) {
       throw new Error('petkit-puramax-card: "cats" is required in config');
     }
     if (!Array.isArray(config.cats) || config.cats.length < 1) {
       throw new Error('petkit-puramax-card: "cats" must be a non-empty array');
+    }
+    // With a single cat, every visit is trivially theirs -- no need to know
+    // which cat used the box, so last_used_by isn't required until there's
+    // an actual ambiguity to resolve.
+    if (config.cats.length > 1 && !config.device_entities.last_used_by) {
+      throw new Error(
+        'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured',
+      );
     }
     config.cats.forEach((cat, i) => {
       if (!cat || !cat.name) {
@@ -71,9 +87,6 @@ export class PetkitPuramaxCard extends HTMLElement {
       }
       if (!cat.color) {
         throw new Error(`petkit-puramax-card: cats[${i}].color is required`);
-      }
-      if (!cat.last_visit_duration_entity) {
-        throw new Error(`petkit-puramax-card: cats[${i}].last_visit_duration_entity is required`);
       }
     });
 
@@ -83,7 +96,6 @@ export class PetkitPuramaxCard extends HTMLElement {
     this._chartData = null;
     this._loadingChart = false;
     this._loadingAnalytics = false;
-    this._catWatermarks = {}; // entity_id -> last_changed seen, to detect new visits live
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     this._render();
   }
@@ -119,19 +131,15 @@ export class PetkitPuramaxCard extends HTMLElement {
     }
   }
 
-  // A visit bumps a cat's last_visit_duration entity's last_changed. If that
-  // happens live, the chart/records (when viewing today) and the analytics
-  // table are both stale until re-fetched — so watch for it and refresh.
+  // A visit bumps the device's total_use sensor. If that happens live, the
+  // chart/records (when viewing today) and the analytics table are both
+  // stale until re-fetched — so watch for it and refresh.
   _maybeRefreshOnNewVisit(prevHass) {
     if (!prevHass) return;
-    const cfg = this._config;
-    let changed = false;
-    cfg.cats.forEach((cat) => {
-      const eid = cat.last_visit_duration_entity;
-      const prev = prevHass.states[eid];
-      const curr = this._hass.states[eid];
-      if (curr && (!prev || prev.last_changed !== curr.last_changed)) changed = true;
-    });
+    const eid = this._config.device_entities.total_use;
+    const prev = prevHass.states[eid];
+    const curr = this._hass.states[eid];
+    const changed = curr && (!prev || prev.last_changed !== curr.last_changed);
     if (changed) {
       if (this._dayOffset === 0) this._loadDay();
       this._loadAnalytics();
@@ -143,6 +151,79 @@ export class PetkitPuramaxCard extends HTMLElement {
     return getState(this._hass, entityId, fallback);
   }
 
+  // Reconstructs per-visit { value: duration, ts, cat } events for a window
+  // from two generic device sensors, requiring no per-cat helper entities:
+  //  - device_entities.total_use: a running counter that bumps by one
+  //    visit's duration on every use (all cats combined). Consecutive-point
+  //    deltas ARE the per-visit durations.
+  //  - device_entities.last_used_by: which cat used it most recently. Only
+  //    fetched/needed when there's more than one cat -- with a single cat
+  //    every visit is trivially theirs. Attribution is carry-forward (see
+  //    `attributeCats`), not an exact-timestamp match, since most PetKit
+  //    integrations don't emit a new last_used_by state when the same cat
+  //    visits twice in a row.
+  //
+  // Unlike the automation this replaces, there's no race condition to guard
+  // against here: history is only ever read well after both sensors have
+  // already settled, whereas the automation's race was about reading LIVE
+  // state immediately at trigger time, before a lagging second write landed.
+  async _fetchVisits({ start, end }) {
+    const cfg = this._config;
+    const totalUseReq = buildHistoryRequest({
+      startTime: start,
+      endTime: end,
+      entityIds: [cfg.device_entities.total_use],
+    });
+    const requests = [this._hass.callWS(totalUseReq)];
+    if (cfg.cats.length > 1) {
+      // include_start_time_state:true here is deliberate and safe (see the
+      // doc comment on buildHistoryRequest): this is an identity sensor
+      // used only for carry-forward attribution, not a duration being
+      // charted, so a synthetic "value when the window opened" point is
+      // exactly the baseline needed to attribute the day's first visit(s)
+      // if the same cat continued from before the window.
+      const lastUsedByReq = buildHistoryRequest({
+        startTime: start,
+        endTime: end,
+        entityIds: [cfg.device_entities.last_used_by],
+        includeStartTimeState: true,
+      });
+      requests.push(this._hass.callWS(lastUsedByReq));
+    }
+
+    let totalUseResult = {};
+    let lastUsedByResult = {};
+    try {
+      const [totalUse, lastUsedBy] = await Promise.all(requests);
+      totalUseResult = totalUse || {};
+      lastUsedByResult = lastUsedBy || {};
+    } catch (_e) {
+      // leave both as {}
+    }
+
+    const durationEvents = deltaEvents(totalUseResult[cfg.device_entities.total_use], {
+      minDelta: 0,
+      maxDelta: MAX_VALID_VISIT_SECONDS,
+    });
+
+    let attributed;
+    if (cfg.cats.length > 1) {
+      const knownNames = cfg.cats.map((c) => c.name);
+      const catEvents = catChangeEvents(lastUsedByResult[cfg.device_entities.last_used_by], knownNames);
+      attributed = attributeCats(durationEvents, catEvents);
+    } else {
+      attributed = durationEvents.map((e) => ({ ...e, cat: cfg.cats[0].name }));
+    }
+
+    const catsByName = new Map(cfg.cats.map((c) => [c.name, c]));
+    // A duration event with no resolvable cat (e.g. the very first visit
+    // ever, before any last_used_by value has been recorded) can't be
+    // rendered against a specific cat and is dropped rather than guessed.
+    return attributed
+      .filter((e) => catsByName.has(e.cat))
+      .map((e) => ({ cat: catsByName.get(e.cat), duration: e.value, ts: e.ts }));
+  }
+
   // ---------- data loading ----------
   async _loadDay() {
     if (!this._hass) return;
@@ -150,15 +231,25 @@ export class PetkitPuramaxCard extends HTMLElement {
     this._renderChartArea();
     const cfg = this._config;
     const { start, end } = dayBounds(this._dayOffset);
-    const entityIds = [...cfg.cats.map((c) => c.last_visit_duration_entity), cfg.device_entities.last_event].filter(
-      Boolean,
-    );
+    let visits = [];
+    let eventHist = [];
     try {
-      const result = await this._hass.callWS(buildHistoryRequest({ startTime: start, endTime: end, entityIds }));
-      this._chartData = result || {};
+      const [visitsResult, eventResult] = await Promise.all([
+        this._fetchVisits({ start, end }),
+        cfg.device_entities.last_event
+          ? this._hass.callWS(
+              buildHistoryRequest({ startTime: start, endTime: end, entityIds: [cfg.device_entities.last_event] }),
+            )
+          : Promise.resolve({}),
+      ]);
+      visits = visitsResult;
+      eventHist = (eventResult || {})[cfg.device_entities.last_event] || [];
     } catch (_e) {
-      this._chartData = {};
+      visits = [];
+      eventHist = [];
     }
+    this._chartVisits = visits;
+    this._chartEventHist = eventHist;
     this._loadingChart = false;
     this._renderChartArea();
   }
@@ -169,22 +260,21 @@ export class PetkitPuramaxCard extends HTMLElement {
     this._renderAnalyticsArea();
     const cfg = this._config;
     const now = new Date();
-    // 7 raw days of last_visit_duration history covers both the 3d and 7d
-    // windows — no accumulator/statistics entities needed, everything is
-    // derived client-side.
+    // 7 raw days of visit reconstruction covers both the 3d and 7d windows
+    // — no accumulator/statistics entities needed, everything is derived
+    // client-side.
     const start = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-    const entityIds = cfg.cats.map((c) => c.last_visit_duration_entity);
-    let data = {};
+    let visits = [];
     try {
-      data = await this._hass.callWS(buildHistoryRequest({ startTime: start, endTime: now, entityIds }));
+      visits = await this._fetchVisits({ start, end: now });
     } catch (_e) {
-      data = {};
+      visits = [];
     }
 
     const todayKey = dayKey(now.getTime());
     const perCat = {};
     cfg.cats.forEach((cat) => {
-      const events = pointsToEvents(data[cat.last_visit_duration_entity]);
+      const events = visits.filter((v) => v.cat === cat).map((v) => ({ value: v.duration, ts: v.ts }));
       const byDay = bucketByDay(events, { dayKeyFn: dayKey });
       perCat[cat.name] = summarize(byDay, todayKey);
     });
@@ -341,15 +431,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (this._loadingChart) return;
 
     const cfg = this._config;
-    const data = this._chartData || {};
-
-    // Build visit events from each cat's last_visit_duration entity history
-    const visits = [];
-    cfg.cats.forEach((cat) => {
-      const events = pointsToEvents(data[cat.last_visit_duration_entity]);
-      events.forEach((e) => visits.push({ cat, duration: e.value, ts: e.ts }));
-    });
-    visits.sort((a, b) => a.ts - b.ts);
+    const visits = (this._chartVisits || []).slice().sort((a, b) => a.ts - b.ts);
 
     // Chart: 0-24h stem plot
     const width = CHART_WIDTH;
@@ -468,7 +550,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       color: v.cat.color,
       text: `${v.cat.name} just spent ${formatDuration(v.duration)} in the litter box`,
     }));
-    const eventHist = data[cfg.device_entities.last_event] || [];
+    const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
     eventHist.forEach((point) => {
       const val = point.s ?? point.state;

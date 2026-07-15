@@ -18,13 +18,21 @@
  * day's actual last value as if it had just happened again. See
  * `history.test.js` for the regression test that pins this down.
  *
+ * `includeStartTimeState` defaults to `false` for the reason above. The one
+ * legitimate exception is an identity/label sensor (e.g. "last used by")
+ * queried purely for carry-forward attribution rather than plotted as an
+ * event itself — there, the synthetic start-of-window point is exactly the
+ * "whatever the value was when the window opened" baseline you want, so
+ * pass `includeStartTimeState: true` for that specific query.
+ *
  * @param {object} params
  * @param {Date|string} params.startTime
  * @param {Date|string} params.endTime
  * @param {string[]} params.entityIds
+ * @param {boolean} [params.includeStartTimeState]
  * @returns {object} WS payload for `hass.callWS(...)`.
  */
-export function buildHistoryRequest({ startTime, endTime, entityIds }) {
+export function buildHistoryRequest({ startTime, endTime, entityIds, includeStartTimeState = false }) {
   const start = startTime instanceof Date ? startTime.toISOString() : startTime;
   const end = endTime instanceof Date ? endTime.toISOString() : endTime;
   return {
@@ -34,8 +42,7 @@ export function buildHistoryRequest({ startTime, endTime, entityIds }) {
     entity_ids: entityIds,
     minimal_response: false,
     no_attributes: true,
-    // See the doc comment above — must always be false.
-    include_start_time_state: false,
+    include_start_time_state: includeStartTimeState,
   };
 }
 
@@ -80,4 +87,95 @@ export function pointsToEvents(historyForEntity, { filterPositive = true } = {})
     events.push(parsed);
   }
   return events;
+}
+
+/**
+ * Turns a running-total counter's history (e.g. a device's cumulative
+ * "total use" sensor, which bumps by one visit's duration on every use) into
+ * per-visit `{ value, ts }` events, where `value` is the delta between
+ * consecutive readings rather than the raw cumulative value.
+ *
+ * Only deltas strictly between `minDelta` and `maxDelta` are kept, so a
+ * daily counter reset-to-zero (a large negative or zero delta) and a bogus
+ * jump (e.g. a multi-day gap from the device having been offline) aren't
+ * read as a single implausible visit. Unparseable points (`unavailable`,
+ * etc., via `parseHistoryPoint`) are dropped before computing deltas, so a
+ * transient coordinator hiccup between two real readings doesn't corrupt
+ * the delta between them.
+ *
+ * @param {Array<object>} historyForEntity
+ * @param {{ minDelta?: number, maxDelta?: number }} [options]
+ * @returns {Array<{ value: number, ts: number }>}
+ */
+export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinity } = {}) {
+  if (!Array.isArray(historyForEntity)) return [];
+  const points = historyForEntity
+    .map(parseHistoryPoint)
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+  const events = [];
+  for (let i = 1; i < points.length; i++) {
+    const delta = points[i].value - points[i - 1].value;
+    if (delta > minDelta && delta < maxDelta) {
+      events.push({ value: delta, ts: points[i].ts });
+    }
+  }
+  return events;
+}
+
+/**
+ * Extracts identity-change events from an identity/label sensor's history
+ * (e.g. a device's "last used by" sensor), keeping only points whose state
+ * is one of `knownNames`. Devices commonly write transient placeholder
+ * states (`unavailable`, `no_record_yet`, ...) between real values on every
+ * coordinator refresh — those aren't a change of identity and are dropped
+ * here rather than passed on to `attributeCats`.
+ *
+ * @param {Array<{ s?: string, state?: string, lu?: number, last_changed?: string }>} historyForEntity
+ * @param {string[]} knownNames
+ * @returns {Array<{ cat: string, ts: number }>}
+ */
+export function catChangeEvents(historyForEntity, knownNames) {
+  if (!Array.isArray(historyForEntity)) return [];
+  const nameSet = new Set(knownNames);
+  const events = [];
+  for (const point of historyForEntity) {
+    const state = point.s ?? point.state;
+    if (!nameSet.has(state)) continue;
+    const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
+    if (!ts || Number.isNaN(ts)) continue;
+    events.push({ cat: state, ts });
+  }
+  events.sort((a, b) => a.ts - b.ts);
+  return events;
+}
+
+/**
+ * Attributes each duration event to a cat via carry-forward (last
+ * observation carried forward): the cat in effect is whichever
+ * `catChangeEvents` entry most recently occurred at or before that event's
+ * timestamp. This is deliberately NOT an exact-timestamp match — when the
+ * same cat visits twice in a row, most PetKit integrations don't emit a new
+ * "last used by" state (the value didn't change), so there's no change
+ * event to match against the second visit; the correct answer for it is
+ * still "whoever the last known cat was."
+ *
+ * `catEvents` must already be sorted by `ts` ascending (as returned by
+ * `catChangeEvents`). `durationEvents` is assumed sorted by `ts` ascending
+ * too, so a single forward pass with one pointer suffices.
+ *
+ * @param {Array<{ value: number, ts: number }>} durationEvents
+ * @param {Array<{ cat: string, ts: number }>} catEvents
+ * @returns {Array<{ value: number, ts: number, cat: string|null }>}
+ */
+export function attributeCats(durationEvents, catEvents) {
+  let idx = 0;
+  let current = null;
+  return durationEvents.map((event) => {
+    while (idx < catEvents.length && catEvents[idx].ts <= event.ts) {
+      current = catEvents[idx].cat;
+      idx++;
+    }
+    return { ...event, cat: current };
+  });
 }
