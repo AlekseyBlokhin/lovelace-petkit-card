@@ -28,4 +28,18 @@ export const DEFAULT_DECLINE_THRESHOLD_PCT = 60;
 /** Chart layout constants (pixels, in the SVG's own viewBox coordinate space). */
 export const CHART_WIDTH = 600;
 export const CHART_HEIGHT = 240;
-export const CHART_PADDING = { left: 64, right: 10, top: 10, bottom: 26 };
+/**
+ * `left`/`bottom` reserve room for the HTML axis-label overlays (see
+ * `_renderChartArea()`), NOT for SVG text anymore -- axis label text moved
+ * out of the SVG entirely (issue #5) so it can use a real, fixed CSS
+ * font-size instead of a viewBox-scaled one. These paddings only need to
+ * keep the plotted gridlines/stems clear of where the HTML label overlay
+ * sits: `left` clears the fixed-width y-axis label column (see
+ * `.axis-label-y` in petkit-puramax-card.styles.js, sized for the widest
+ * "MM'SS\"" label), `bottom` reserves a thin band below the plot for the
+ * x-axis label row. Both are approximations tuned for this card's typical
+ * ~280-320px rendered width (see the `.chart-svg` comment) -- since the
+ * HTML labels no longer scale with card width, alignment is not pixel-exact
+ * at every card width, only "close enough by eye" at the typical size.
+ */
+export const CHART_PADDING = { left: 46, right: 10, top: 10, bottom: 28 };

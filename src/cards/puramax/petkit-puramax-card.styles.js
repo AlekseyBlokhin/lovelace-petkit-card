@@ -33,14 +33,35 @@ export const CARD_STYLES = `
      height follow the viewBox aspect ratio at the actual rendered width, so
      the element's box always matches its content with no dead space. */
   .chart-svg { width: 100%; height: auto; display: block; }
+  /* Solid hairlines, never dashed, per this project's dataviz guidance
+     (gridlines are recessive chart furniture, not a plotted series). */
   .grid-line-v { stroke: var(--divider-color); stroke-width: 1; }
-  .grid-line-h { stroke: var(--divider-color); stroke-width: 1; stroke-dasharray: 2,3; opacity: 0.5; }
-  /* Font sizes here are in the SVG's viewBox user-units, not CSS px -- at a
-     ~600-unit-wide viewBox rendered into a ~280-320px card, a "13px"/"11px"
-     value here actually rendered around 6px on screen. Sized up so the
-     effective on-screen size reads clearly at typical card widths. */
-  .axis-label { font-size: 26px; fill: var(--secondary-text-color); text-anchor: middle; font-weight: 500; }
-  .axis-label-y { font-size: 20px; fill: var(--secondary-text-color); text-anchor: end; }
+  .grid-line-h { stroke: var(--divider-color); stroke-width: 1; opacity: 0.5; }
+  /* Axis tick labels: real HTML elements absolutely positioned over
+     .chart-wrap (see the xAxisLabels/yAxisLabels comment in
+     _renderChartArea), NOT SVG text. A normal, fixed CSS font-size here
+     means the on-screen text size no longer depends on the SVG viewBox's
+     scale factor at the card's current rendered width -- that dependency
+     was the root cause of two prior "wrong size" regressions (issue #5).
+     0.7em matches this card's existing muted/secondary-text convention
+     (see .chip-label). */
+  .axis-label { position: absolute; transform: translateX(-50%); font-size: 0.7em; color: var(--secondary-text-color); font-weight: 500; white-space: nowrap; }
+  .axis-label-y {
+    position: absolute;
+    left: 0;
+    /* Sized for the widest real label, 01'30" (Task 3's MM'SS" format,
+       ~6 characters) at 0.7em, plus a little breathing room before the
+       plot area -- see CHART_PADDING.left's comment for how this lines up
+       (approximately, by design) with the SVG's own left inset. */
+    width: 42px;
+    transform: translateY(-50%);
+    font-size: 0.7em;
+    color: var(--secondary-text-color);
+    text-align: right;
+    padding-right: 4px;
+    white-space: nowrap;
+    box-sizing: border-box;
+  }
   .visit-point { pointer-events: none; }
   .visit-hit { cursor: pointer; pointer-events: stroke; }
   .chart-tooltip { position: absolute; pointer-events: none; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 6px; padding: 4px 8px; font-size: 0.75em; color: var(--primary-text-color); box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap; z-index: 10; opacity: 0; transition: opacity 0.1s; transform: translate(-50%, -110%); }

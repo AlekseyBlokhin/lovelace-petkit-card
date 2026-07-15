@@ -362,18 +362,33 @@ export class PetkitPuramaxCard extends HTMLElement {
     const { xFor, yFor } = buildScales({ dayStart: start, niceMax, width, height, padding });
     const { vertical, horizontal } = buildGridLines({ niceMax, yStep, width, height, padding });
 
+    // Gridlines only -- tick label *text* lives in HTML overlays below, not
+    // in the SVG (see the axis label overlay comment above `area.innerHTML`
+    // and issue #5: SVG text font-size is in viewBox user-units, not real
+    // CSS px, so it can't be given a stable on-screen size).
     const vGridLines = vertical
-      .map(
-        (v) => `<line x1="${v.x}" y1="${padding.top}" x2="${v.x}" y2="${height - padding.bottom}" class="grid-line-v" />
-              <text x="${v.x}" y="${height - 6}" class="axis-label">${v.label}</text>`,
-      )
+      .map((v) => `<line x1="${v.x}" y1="${padding.top}" x2="${v.x}" y2="${height - padding.bottom}" class="grid-line-v" />`)
       .join('');
 
     const hGridLines = horizontal
-      .map(
-        (h) => `<line x1="${padding.left}" y1="${h.y}" x2="${width - padding.right}" y2="${h.y}" class="grid-line-h" />
-              <text x="${padding.left - 6}" y="${h.y + 3}" class="axis-label-y">${h.label}</text>`,
-      )
+      .map((h) => `<line x1="${padding.left}" y1="${h.y}" x2="${width - padding.right}" y2="${h.y}" class="grid-line-h" />`)
+      .join('');
+
+    // Axis tick labels as absolutely-positioned HTML overlays inside
+    // `.chart-wrap`, positioned as a percentage of the wrap's box computed
+    // from the same viewBox coordinates the SVG uses. This works because
+    // `.chart-wrap`'s rendered box exactly matches the SVG's box (same
+    // aspect ratio, width:100%) -- see `.chart-svg`'s height:auto comment in
+    // the stylesheet. Real, fixed CSS font-size (`.axis-label`/
+    // `.axis-label-y` in the stylesheet) means these no longer grow/shrink
+    // with card width the way SVG-text font-size did.
+    const xAxisLabelTop = ((height - padding.bottom) / height) * 100;
+    const xAxisLabels = vertical
+      .map((v) => `<div class="axis-label" style="left:${(v.x / width) * 100}%;top:${xAxisLabelTop}%">${v.label}</div>`)
+      .join('');
+
+    const yAxisLabels = horizontal
+      .map((h) => `<div class="axis-label-y" style="top:${(h.y / height) * 100}%">${h.label}</div>`)
       .join('');
 
     const stems = visits
@@ -394,6 +409,8 @@ export class PetkitPuramaxCard extends HTMLElement {
           ${vGridLines}
           ${stems || ''}
         </svg>
+        ${xAxisLabels}
+        ${yAxisLabels}
         <div class="chart-tooltip" id="chart-tooltip"></div>
       </div>
       ${visits.length === 0 ? '<div class="empty-note">No visits recorded this day</div>' : ''}
