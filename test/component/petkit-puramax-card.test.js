@@ -305,6 +305,123 @@ describe('PetkitPuramaxCard: rendering', () => {
   it('getCardSize returns a fixed layout size', () => {
     expect(card.getCardSize()).toBe(14);
   });
+
+  it('renders the cat name and color dot inside the analytics table\'s top-left cell, not a separate title line', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    // The old standalone title line is gone...
+    expect(card.shadowRoot.querySelector('.cat-analytics-title')).toBeNull();
+    // ...and the name + dot now live inside the table's first cell.
+    const nameCell = card.shadowRoot.querySelector('.cat-analytics table .cat-name-cell');
+    expect(nameCell).not.toBeNull();
+    expect(nameCell.textContent).toBe('Cat A');
+    expect(nameCell.querySelector('.dot')).not.toBeNull();
+  });
+
+  it('escapes a malicious cat name/color in the analytics table cell (XSS regression)', async () => {
+    card.setConfig(
+      baseConfig({
+        cats: [
+          {
+            name: '<b>evil</b>',
+            color: '"><img src=x onerror=alert(1)>',
+            last_visit_duration_entity: 'input_number.test_cat_a_duration',
+          },
+        ],
+      }),
+    );
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.cat-analytics img')).toBeNull();
+    expect(card.shadowRoot.querySelector('.cat-analytics b')).toBeNull();
+    const nameCell = card.shadowRoot.querySelector('.cat-name-cell');
+    expect(nameCell.textContent).toBe('<b>evil</b>');
+  });
+
+  it('Analytics "Duration" row shows the weighted average visit duration, not the total (refs #10)', async () => {
+    // Two synthetic past days for the cat's last_visit_duration entity:
+    //  - yesterday: one 100s visit (that day's own average = 100)
+    //  - 2 days ago: four 10s visits, total 40s (that day's own average = 10)
+    // A "total" row would show 1m10s (100+40) for 3d/7d avg; a naive
+    // mean-of-daily-averages would show 55s; the correct weighted average is
+    // (100+40)/(1+4) = 28s.
+    const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+    const yesterday9am = new Date(startOfToday);
+    yesterday9am.setDate(yesterday9am.getDate() - 1);
+    yesterday9am.setHours(9, 0, 0, 0);
+    const twoDaysAgo9am = new Date(startOfToday);
+    twoDaysAgo9am.setDate(twoDaysAgo9am.getDate() - 2);
+    twoDaysAgo9am.setHours(9, 0, 0, 0);
+
+    const points = [
+      { s: '100', lu: Math.floor(yesterday9am.getTime() / 1000) },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 60 },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 120 },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 180 },
+    ];
+
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'input_number.test_cat_a_duration': points });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.cat-analytics table tr');
+    expect(rows.length).toBe(3);
+    const durationCells = rows[2].querySelectorAll('td');
+    expect(durationCells[0].textContent).toBe('Duration');
+    // No visits today -> "—", not "0s".
+    expect(durationCells[1].textContent).toBe('—');
+    expect(durationCells[2].textContent).toBe('28s'); // 3d avg, weighted
+    expect(durationCells[3].textContent).toBe('28s'); // 7d avg, weighted (only 2 days exist)
+    expect(durationCells[2].textContent).not.toBe('1m10s'); // would be the (wrong) total-based value
+  });
+});
+
+describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => {
+  it('hides unavailable/unknown/no_events_yet by default, showing only real device events', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'no_events_yet', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'unavailable', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+      { s: 'unknown', lu: Math.floor(today9am.getTime() / 1000) + 120 },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 180 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+  });
+
+  it('a user can hide any other noisy state themselves via event_labels: null (the general mechanism)', async () => {
+    const cfg = baseConfig({ event_labels: { some_noisy_state: null } });
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'some_noisy_state', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+  });
 });
 
 describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {

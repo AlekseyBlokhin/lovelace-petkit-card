@@ -81,7 +81,7 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `device_entities.error` | no | entity id | — | Sensor reporting the device's current error/status code. |
 | `device_entities.last_event` | no | entity id | — | Sensor reporting the device's most recent maintenance/cleaning event. |
 | `device_entities.state` | no | entity id | — | Sensor reporting the device's current operating state (used by the `toggle_maintenance` control action). |
-| `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Lets you relabel or add event states without editing the card. YAML-only — no visual editor field. |
+| `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Lets you relabel or add event states without editing the card. Set a state's value to `null` to hide it from Working Records entirely — see note below. YAML-only — no visual editor field. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See below. |
 | `cats[].name` | yes | string | — | Display name. |
 | `cats[].color` | yes | string (CSS color) | — | Chart/legend color for this cat. |
@@ -109,6 +109,11 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 `cats`, `info_row`, and `controls_row` all have a repeating-row visual
 editor (add/remove buttons); `value_map` and `event_labels` are YAML-only
 for v1 since an arbitrary object-of-strings has no clean `ha-form` widget.
+
+Set any event's value to `null` in `event_labels` to hide it from Working
+Records entirely — this is the general mechanism for filtering out noisy
+states (the defaults already hide `no_events_yet`, `unavailable`, and
+`unknown` this way).
 
 ## Automation Blueprint: per-cat visit tracking
 

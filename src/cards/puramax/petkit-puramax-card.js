@@ -514,11 +514,10 @@ export class PetkitPuramaxCard extends HTMLElement {
         }
         return `
         <div class="cat-analytics">
-          <div class="cat-analytics-title"><span class="dot" style="background:${cat.color}"></span>${cat.name}</div>
           <table>
-            <tr><td></td><td>Today</td><td>3d avg</td><td>7d avg</td></tr>
+            <tr><td class="cat-name-cell"><span class="dot" style="background:${escapeHtml(cat.color)}"></span>${escapeHtml(cat.name)}</td><td>Today</td><td>3d avg</td><td>7d avg</td></tr>
             <tr><td>Visits</td><td>${a.todayCount ?? 0}</td><td>${a.avg3dVisits !== null && a.avg3dVisits !== undefined ? a.avg3dVisits.toFixed(1) : '—'}</td><td>${a.avg7dVisits !== null && a.avg7dVisits !== undefined ? a.avg7dVisits.toFixed(1) : '—'}</td></tr>
-            <tr><td>Duration</td><td>${formatDuration(a.todayTotal || 0)}</td><td>${a.avg3dTotal ? formatDuration(a.avg3dTotal) : '—'}</td><td>${a.avg7dTotal ? formatDuration(a.avg7dTotal) : '—'}</td></tr>
+            <tr><td>Duration</td><td>${a.todayAvgDuration ? formatDuration(a.todayAvgDuration) : '—'}</td><td>${a.avg3dDuration ? formatDuration(a.avg3dDuration) : '—'}</td><td>${a.avg7dDuration ? formatDuration(a.avg7dDuration) : '—'}</td></tr>
           </table>
         </div>
       `;

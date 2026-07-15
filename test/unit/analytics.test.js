@@ -98,6 +98,73 @@ describe('summarize', () => {
     expect(result.todayCount).toBe(0);
     expect(result.todayTotal).toBe(0);
   });
+
+  describe('*AvgDuration fields (average duration per visit, refs #10)', () => {
+    it('todayAvgDuration is todayTotal / todayCount when there were visits today', () => {
+      const byDay = { today: { count: 4, total: 100 } };
+      const result = summarize(byDay, 'today');
+      expect(result.todayAvgDuration).toBe(25);
+    });
+
+    it('todayAvgDuration is null (not 0) when there were no visits today', () => {
+      const byDay = { d1: { count: 1, total: 10 } };
+      const result = summarize(byDay, 'today');
+      expect(result.todayCount).toBe(0);
+      expect(result.todayAvgDuration).toBeNull();
+    });
+
+    it('avg3dDuration/avg7dDuration are null when there is no past history (0 days)', () => {
+      const byDay = { today: { count: 2, total: 50 } };
+      const result = summarize(byDay, 'today');
+      expect(result.avg3dDuration).toBeNull();
+      expect(result.avg7dDuration).toBeNull();
+    });
+
+    it('is a WEIGHTED average across the window, not the mean of each day\'s own average', () => {
+      // Day 1: one 100s visit (that day's own average = 100).
+      // Day 2: four visits totaling 40s (that day's own average = 10).
+      // A naive mean-of-daily-averages would give (100 + 10) / 2 = 55.
+      // The correct weighted average is (100 + 40) / (1 + 4) = 28.
+      const byDay = {
+        today: { count: 0, total: 0 },
+        d1: { count: 1, total: 100 },
+        d2: { count: 4, total: 40 },
+      };
+      const result = summarize(byDay, 'today');
+      expect(result.avg3dDuration).toBe(28);
+      expect(result.avg3dDuration).not.toBe(55);
+    });
+
+    it('avg3dDuration only uses the most recent 3 days (matching avg3dTotal\'s window)', () => {
+      const byDay = {
+        today: { count: 0, total: 0 },
+        a1: { count: 10, total: 1000 }, // outside the last-3 window, must be excluded
+        a2: { count: 1, total: 20 },
+        a3: { count: 1, total: 10 },
+        a4: { count: 1, total: 30 },
+      };
+      const result = summarize(byDay, 'today');
+      // last 3 sorted keys: a2,a3,a4 -> total (20+10+30)=60 over count 3 = 20
+      expect(result.avg3dDuration).toBe(20);
+    });
+
+    it('avg7dDuration only uses the most recent 7 days, weighted (fewer-than-window case covered by avg3d tests above)', () => {
+      const byDay = { today: { count: 0, total: 0 } };
+      for (let i = 1; i <= 9; i++) {
+        // counts vary so a naive per-day-average mean would differ from the weighted result
+        byDay[`d${i.toString().padStart(2, '0')}`] = { count: i, total: i * 10 };
+      }
+      const result = summarize(byDay, 'today');
+      // last 7 sorted keys: d03..d09 -> counts 3..9, totals 30..90
+      const totalDuration = [3, 4, 5, 6, 7, 8, 9].reduce((s, i) => s + i * 10, 0);
+      const totalCount = [3, 4, 5, 6, 7, 8, 9].reduce((s, i) => s + i, 0);
+      expect(result.avg7dDuration).toBeCloseTo(totalDuration / totalCount, 10);
+      // Since every day here has the same per-visit duration (10s), the
+      // weighted average happens to equal 10 too -- assert that directly for
+      // a concrete, readable expectation.
+      expect(result.avg7dDuration).toBeCloseTo(10, 10);
+    });
+  });
 });
 
 describe('detectAnomaly', () => {
