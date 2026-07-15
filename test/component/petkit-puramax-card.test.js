@@ -153,6 +153,39 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(card.shadowRoot.querySelector('.chip.warn')).not.toBeNull();
   });
 
+  it('escapes a malicious entity state value instead of injecting it into the DOM (XSS regression)', async () => {
+    // info_row can point at ANY entity, not just PETKIT's own narrow-enum
+    // sensors -- a state value is untrusted input as far as this card is
+    // concerned, and must never reach innerHTML unescaped.
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.untrusted', name: 'Untrusted' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.untrusted': { state: '<img src=x onerror=alert(1)>' },
+    });
+    await flush();
+    // No injected element should have been parsed into the live DOM...
+    expect(card.shadowRoot.querySelector('img')).toBeNull();
+    // ...and the escaped text should still be visible as literal text.
+    const chipValue = card.shadowRoot.querySelector('.chip-value');
+    expect(chipValue.textContent).toBe('<img src=x onerror=alert(1)>');
+  });
+
+  it('escapes an HTML-breakout attempt in a device error state without adding extra elements', async () => {
+    const cfg = baseConfig();
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: '"><b>pwned</b>' },
+    });
+    await flush();
+    const warnChips = card.shadowRoot.querySelectorAll('.chip.warn');
+    // Exactly one warn chip -- an unescaped payload here would have broken
+    // out of the chip-value div and injected a sibling <b> element/extra chip.
+    expect(warnChips.length).toBe(1);
+    expect(card.shadowRoot.querySelector('.chip-value b')).toBeNull();
+    expect(warnChips[0].querySelector('.chip-value').textContent).toBe('"><b>pwned</b>');
+  });
+
   it('renders one button per controls_row entry', async () => {
     const cfg = baseConfig({
       controls_row: [

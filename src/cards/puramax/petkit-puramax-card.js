@@ -1,4 +1,4 @@
-import { formatDuration } from '../../lib/format.js';
+import { formatDuration, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
 import { buildHistoryRequest, pointsToEvents } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
@@ -9,6 +9,7 @@ import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
   DEFAULT_EVENT_LABELS,
+  DEFAULT_DECLINE_THRESHOLD_PCT,
   CHART_WIDTH,
   CHART_HEIGHT,
   CHART_PADDING,
@@ -310,10 +311,12 @@ export class PetkitPuramaxCard extends HTMLElement {
   }
 
   _chip(icon, label, value, warn) {
+    // icon/label are config-provided, value is often a live entity state --
+    // escape all three, since none are guaranteed free of HTML metacharacters.
     return `
       <div class="chip ${warn ? 'warn' : ''}">
-        <ha-icon icon="${icon}"></ha-icon>
-        <div class="chip-text"><div class="chip-label">${label}</div><div class="chip-value">${value}</div></div>
+        <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
+        <div class="chip-text"><div class="chip-label">${escapeHtml(label)}</div><div class="chip-value">${escapeHtml(value)}</div></div>
       </div>`;
   }
 
@@ -468,8 +471,8 @@ export class PetkitPuramaxCard extends HTMLElement {
             (r) => `
           <div class="record-row">
             <div class="record-time">${new Date(r.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</div>
-            <ha-icon icon="${r.icon}" style="color:${r.color}"></ha-icon>
-            <div class="record-text">${r.text}</div>
+            <ha-icon icon="${escapeHtml(r.icon)}" style="color:${escapeHtml(r.color)}"></ha-icon>
+            <div class="record-text">${escapeHtml(r.text)}</div>
           </div>
         `,
           )
@@ -496,7 +499,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       return;
     }
     const cfg = this._config;
-    const threshold = (cfg.decline_threshold_pct || 60) / 100;
+    const threshold = (cfg.decline_threshold_pct || DEFAULT_DECLINE_THRESHOLD_PCT) / 100;
     const warnings = [];
     grid.innerHTML = cfg.cats
       .map((cat) => {
