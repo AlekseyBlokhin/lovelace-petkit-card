@@ -25,6 +25,12 @@ client-side from plain `input_number` entity history, no accumulator or
 - A real visual config editor (drag the card onto a dashboard and configure
   it with forms — no YAML required to get started).
 
+## Prerequisites
+
+- **A PetKit Home Assistant integration**, already installed and configured, exposing your device's entities — either [`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit) or [`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit). This card only reads entities; it doesn't talk to PetKit's API itself, and doesn't care which of the two integrations provided them.
+- **One `input_number` helper per cat** (`Settings → Devices & Services → Helpers → Create Helper → Number`), which the automation Blueprint below writes into and the card reads history from.
+- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — built only on Home Assistant's own built-in `ha-form`/`ha-icon` elements, zero runtime npm dependencies (`package.json` has none). You don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
+
 ## Installation
 
 ### Via HACS (custom repository)
