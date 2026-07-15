@@ -9,10 +9,6 @@ status, controls, and per-cat visit analytics — computed entirely
 client-side from plain `input_number` entity history, no accumulator or
 `statistics` helper entities required.
 
-Recommended repo topics (for whoever manages the GitHub repo settings):
-`home-assistant`, `hacs`, `lovelace`, `lovelace-card`, `custom-card`,
-`petkit`, `litter-box`.
-
 <!-- screenshot placeholder: add a real screenshot here after the first install -->
 
 ## What it does
@@ -142,9 +138,9 @@ and can't be referenced directly inside `{{ }}`.
 
 ## Supported devices
 
-Today this card only supports the **PETKIT PURAMAX** — the maintainer only
-owns that device, and the config schema (`device_entities`, event
-vocabulary) is written against its sensors.
+Today this card only supports the **PETKIT PURAMAX** — that's the only
+device I own, and the config schema (`device_entities`, event vocabulary)
+is written against its sensors.
 
 Other PETKIT devices are very welcome, but need community-contributed data
 to support: please open a
@@ -152,25 +148,6 @@ to support: please open a
 with your device's entities and example states/attributes. See
 [CONTRIBUTING.md](./CONTRIBUTING.md) for details on what's needed and how a
 new device card would be added to this repo.
-
-## Roadmap / future work
-
-The underlying PetKit Home Assistant integrations
-([`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit)
-and the actively-maintained
-[`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit))
-already fetch full per-visit records (cat, duration, timestamp) from the
-PetKit cloud API internally, but don't currently expose them as Home
-Assistant entities — only current/most-recent aggregate values. That's why
-this project needs the companion automation Blueprint to reconstruct
-per-cat visit history from state-change timestamps.
-
-If either upstream integration adds an Event Entity per visit (with cat,
-duration, and timestamp as event data) in the future, this Blueprint —
-and the manual per-cat `input_number` plumbing it drives — could
-eventually be retired in favor of reading that event stream directly. This
-is future work / an upstream contribution opportunity, not something this
-repo currently implements.
 
 ## License
 

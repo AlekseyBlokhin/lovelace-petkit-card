@@ -4,13 +4,13 @@ Thanks for considering a contribution to `lovelace-petkit-card`.
 
 ## Requesting support for a new PETKIT device
 
-This repo's maintainer only owns a **PETKIT PURAMAX**, so the card's config
-schema, device-status vocabulary (`event_labels`), and status/control
-defaults are all written against that device's entities. Supporting a
-different PETKIT device (a different litter box model, a feeder, a
-fountain, etc.) requires community-contributed data — the maintainer has no
-way to know what entities/attributes another device exposes, or how its
-firmware reports state, without someone who owns it providing that.
+I only own a **PETKIT PURAMAX**, so the card's config schema,
+device-status vocabulary (`event_labels`), and status/control defaults are
+all written against that device's entities. Supporting a different PETKIT
+device (a different litter box model, a feeder, a fountain, etc.) requires
+community-contributed data — I have no way to know what entities/attributes
+another device exposes, or how its firmware reports state, without someone
+who owns it providing that.
 
 To request support for a new device:
 
@@ -26,8 +26,8 @@ To request support for a new device:
    - Example state/attribute JSON for its 2-3 most interesting sensors
      (**Developer Tools → States**, select the entity, see "Attributes").
    - Whether you're willing to test a work-in-progress build against your
-     real device — this matters a lot, since the maintainer can't otherwise
-     verify anything works.
+     real device — this matters a lot, since I can't otherwise verify
+     anything works.
 3. If you already have a hand-built dashboard/automation for the device,
    include it — it's the best signal for what data actually matters to real
    users of that device.

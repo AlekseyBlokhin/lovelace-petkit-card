@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.1.0] - 2026-07-15
 
 First public release. Pre-1.0: single device supported, the editor and
-Blueprint are newly built and not yet battle-tested beyond the maintainer's
-own instance, so the config surface may still shift before 1.0.
+Blueprint are newly built and not yet battle-tested beyond my own instance,
+so the config surface may still shift before 1.0.
 
 ### Added
 
@@ -26,5 +26,4 @@ own instance, so the config surface may still shift before 1.0.
   Blueprint that splits a shared per-visit duration sensor into a per-cat
   `input_number`, replacing hand-authoring that automation.
 - Pure, unit-tested logic modules under `src/lib/` (`format`, `day`,
-  `history`, `chart-math`, `analytics`, `chips`, `ha-helpers`), extracted
-  from and improving on the original hand-authored single-file card.
+  `history`, `chart-math`, `analytics`, `chips`, `ha-helpers`).
