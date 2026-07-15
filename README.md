@@ -108,6 +108,38 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 editor (add/remove buttons); `value_map` and `event_labels` are YAML-only
 for v1 since an arbitrary object-of-strings has no clean `ha-form` widget.
 
+## Automation Blueprint: per-cat visit tracking
+
+Each `cats[].last_visit_duration_entity` needs *something* to write a
+per-visit duration into that `input_number` — the card itself is entirely
+read-only against history. The included Blueprint does that: it watches a
+shared "total use" sensor, waits briefly for the device's "last used by"
+sensor to settle (see the race-condition note below), and writes the
+computed delta into the matching cat's `input_number`. This replaces
+hand-authoring that logic as a one-off automation.
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAlekseyBlokhin%2Flovelace-petkit-card%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpetkit_per_cat_visit_tracker.yaml)
+
+Or manually: **Settings → Automations & Scenes → Blueprints → Import
+Blueprint**, paste
+`https://github.com/AlekseyBlokhin/lovelace-petkit-card/blob/main/blueprints/automation/petkit_per_cat_visit_tracker.yaml`,
+then create one automation from it per litter box.
+
+### Blueprint inputs
+
+| Input | Description |
+|---|---|
+| **Total Use sensor** | The sensor that bumps by one visit's duration on every use (shared across all cats). |
+| **Last Used By sensor** | The sensor reporting which cat used the box most recently. |
+| **Cat name to duration helper mapping** | One row per cat: *Cat name* must exactly match this cat's value as reported by the Last Used By sensor; *Duration helper* is the `input_number` (one of your `cats[].last_visit_duration_entity` values) this cat's visit duration gets written to. This is a variable-length list (an `object` selector with `multiple: true`), not a fixed number of cat slots — add as many rows as you have cats. |
+| **Settle delay** (default 3s) | How long to wait after Total Use changes before reading Last Used By. Some PetKit integrations report these as two separate state-changed events from the same event, and Last Used By can lag Total Use by up to ~1s — reading it too early risks crediting a visit to the *previous* cat. |
+| **Max valid visit duration** (default 1800s) | Deltas above this (or non-positive, e.g. the device's own midnight counter reset) are ignored rather than recorded as a visit. |
+
+The Blueprint runs in `queued` mode so back-to-back visits from different
+cats aren't dropped, and binds every `!input` a template needs to a
+`variables:` entry first — `!input` is a YAML tag, not a template value,
+and can't be referenced directly inside `{{ }}`.
+
 ## Supported devices
 
 Today this card only supports the **PETKIT PURAMAX** — the maintainer only
