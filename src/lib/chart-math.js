@@ -3,6 +3,7 @@
  * gridline positions. No DOM/SVG string-building here — that stays in the
  * card, this module only returns plain data.
  */
+import { formatClockDuration } from './format.js';
 
 const NICE_STEPS = [10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600];
 
@@ -57,8 +58,10 @@ export function buildScales({ dayStart, niceMax, width, height, padding }) {
 
 /**
  * Builds plain-data gridline descriptors for both axes: vertical
- * time-of-day lines at 0/6/12/18/24h, and horizontal duration lines every
- * `yStep` up to `niceMax`.
+ * time-of-day lines at 4/8/12/16/20h (the 0/24h tick is deliberately
+ * skipped -- it would sit right at the origin corner and collide visually
+ * with the y-axis's own "00'00"" label there), and horizontal duration
+ * lines every `yStep` up to `niceMax`.
  *
  * @param {object} params
  * @param {number} params.niceMax
@@ -76,17 +79,17 @@ export function buildGridLines({ niceMax, yStep, width, height, padding }) {
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
 
-  const vertical = [0, 6, 12, 18, 24].map((hour) => ({
+  const vertical = [4, 8, 12, 16, 20].map((hour) => ({
     hour,
     x: left + (hour / 24) * plotWidth,
-    label: `${hour}h`,
+    label: `${hour.toString().padStart(2, '0')}:00`,
   }));
 
   const horizontal = [];
   if (yStep > 0) {
     for (let value = 0; value <= niceMax; value += yStep) {
       const y = niceMax ? height - bottom - (value / niceMax) * plotHeight : height - bottom;
-      horizontal.push({ value, y, label: `${value}s` });
+      horizontal.push({ value, y, label: formatClockDuration(value) });
     }
   }
 

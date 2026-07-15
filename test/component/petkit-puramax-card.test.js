@@ -424,6 +424,57 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
   });
 });
 
+describe('PetkitPuramaxCard: chart axis labels (HTML overlay, not SVG text)', () => {
+  let card;
+
+  beforeEach(() => {
+    card = makeCard();
+  });
+
+  it('renders x-axis tick labels as HTML elements in zero-padded HH:00 format, skipping 00:00/24:00', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const labels = Array.from(card.shadowRoot.querySelectorAll('.axis-label')).map((el) => el.textContent);
+    expect(labels).toEqual(['04:00', '08:00', '12:00', '16:00', '20:00']);
+  });
+
+  it('renders y-axis tick labels as HTML elements in PETKIT MM\'SS" format, including the 00\'00" origin tick', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const labels = Array.from(card.shadowRoot.querySelectorAll('.axis-label-y')).map((el) => el.textContent);
+    expect(labels[0]).toBe('00\'00"');
+    expect(labels.every((l) => /^\d{2}'\d{2}"$/.test(l))).toBe(true);
+  });
+
+  it('keeps axis label text out of the SVG entirely (moved to the HTML overlay per issue #5)', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const svg = card.shadowRoot.querySelector('.chart-svg');
+    expect(svg.querySelectorAll('text').length).toBe(0);
+  });
+
+  it('positions x-axis labels via left percentage and y-axis labels via top percentage (viewBox-derived)', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const xLabel = card.shadowRoot.querySelector('.axis-label');
+    expect(xLabel.style.left).toMatch(/%$/);
+    const yLabel = card.shadowRoot.querySelector('.axis-label-y');
+    expect(yLabel.style.top).toMatch(/%$/);
+  });
+
+  it('renders gridlines as solid hairlines (no stroke-dasharray)', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const hLine = card.shadowRoot.querySelector('.grid-line-h');
+    expect(hLine.getAttribute('stroke-dasharray')).toBeNull();
+  });
+});
+
 describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {
   it('keeps the previous day\'s chart on screen instead of clearing to a loading placeholder', async () => {
     const cfg = baseConfig();
