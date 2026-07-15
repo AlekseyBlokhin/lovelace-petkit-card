@@ -338,6 +338,46 @@ describe('PetkitPuramaxCard: rendering', () => {
     const nameCell = card.shadowRoot.querySelector('.cat-name-cell');
     expect(nameCell.textContent).toBe('<b>evil</b>');
   });
+
+  it('Analytics "Duration" row shows the weighted average visit duration, not the total (refs #10)', async () => {
+    // Two synthetic past days for the cat's last_visit_duration entity:
+    //  - yesterday: one 100s visit (that day's own average = 100)
+    //  - 2 days ago: four 10s visits, total 40s (that day's own average = 10)
+    // A "total" row would show 1m10s (100+40) for 3d/7d avg; a naive
+    // mean-of-daily-averages would show 55s; the correct weighted average is
+    // (100+40)/(1+4) = 28s.
+    const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+    const yesterday9am = new Date(startOfToday);
+    yesterday9am.setDate(yesterday9am.getDate() - 1);
+    yesterday9am.setHours(9, 0, 0, 0);
+    const twoDaysAgo9am = new Date(startOfToday);
+    twoDaysAgo9am.setDate(twoDaysAgo9am.getDate() - 2);
+    twoDaysAgo9am.setHours(9, 0, 0, 0);
+
+    const points = [
+      { s: '100', lu: Math.floor(yesterday9am.getTime() / 1000) },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 60 },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 120 },
+      { s: '10', lu: Math.floor(twoDaysAgo9am.getTime() / 1000) + 180 },
+    ];
+
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'input_number.test_cat_a_duration': points });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.cat-analytics table tr');
+    expect(rows.length).toBe(3);
+    const durationCells = rows[2].querySelectorAll('td');
+    expect(durationCells[0].textContent).toBe('Duration');
+    // No visits today -> "—", not "0s".
+    expect(durationCells[1].textContent).toBe('—');
+    expect(durationCells[2].textContent).toBe('28s'); // 3d avg, weighted
+    expect(durationCells[3].textContent).toBe('28s'); // 7d avg, weighted (only 2 days exist)
+    expect(durationCells[2].textContent).not.toBe('1m10s'); // would be the (wrong) total-based value
+  });
 });
 
 describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {

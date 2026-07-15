@@ -29,12 +29,20 @@ export function bucketByDay(events, { dayKeyFn }) {
  * original card's "—" display for "not enough history yet" rather than
  * implying a real zero average.
  *
+ * `*Total` fields are the sum of visit durations over the window (used by
+ * `detectAnomaly()` for the decline/spike banner, which is legitimately
+ * about total time-in-box). `*AvgDuration` fields are the average length of
+ * a single visit over the same window -- for the multi-day windows this is
+ * a *weighted* average (total duration across the window's days divided by
+ * total visit count across those same days), not a mean of each day's own
+ * average, so a day with many visits isn't drowned out by a day with few.
+ *
  * @param {Record<string, { count: number, total: number }>} byDay
  * @param {string} todayKey
  * @returns {{
- *   todayCount: number, todayTotal: number,
- *   avg3dVisits: number|null, avg3dTotal: number|null,
- *   avg7dVisits: number|null, avg7dTotal: number|null,
+ *   todayCount: number, todayTotal: number, todayAvgDuration: number|null,
+ *   avg3dVisits: number|null, avg3dTotal: number|null, avg3dDuration: number|null,
+ *   avg7dVisits: number|null, avg7dTotal: number|null, avg7dDuration: number|null,
  *   daysOfHistory: number,
  * }}
  */
@@ -48,15 +56,29 @@ export function summarize(byDay, todayKey) {
   const avg = (keys, field) =>
     keys.length ? keys.reduce((sum, key) => sum + byDay[key][field], 0) / keys.length : null;
 
+  // Weighted average visit duration across a window: sum of durations over
+  // sum of counts, not a mean of each day's own average.
+  const avgDuration = (keys) => {
+    if (!keys.length) return null;
+    const totalDuration = keys.reduce((sum, key) => sum + byDay[key].total, 0);
+    const totalCount = keys.reduce((sum, key) => sum + byDay[key].count, 0);
+    return totalCount > 0 ? totalDuration / totalCount : null;
+  };
+
   const today = byDay[todayKey];
+  const todayCount = today ? today.count : 0;
+  const todayTotal = today ? today.total : 0;
 
   return {
-    todayCount: today ? today.count : 0,
-    todayTotal: today ? today.total : 0,
+    todayCount,
+    todayTotal,
+    todayAvgDuration: todayCount > 0 ? todayTotal / todayCount : null,
     avg3dVisits: avg(last3, 'count'),
     avg3dTotal: avg(last3, 'total'),
+    avg3dDuration: avgDuration(last3),
     avg7dVisits: avg(last7, 'count'),
     avg7dTotal: avg(last7, 'total'),
+    avg7dDuration: avgDuration(last7),
     daysOfHistory: pastDays.length,
   };
 }
