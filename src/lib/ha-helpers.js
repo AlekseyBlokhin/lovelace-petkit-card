@@ -2,13 +2,19 @@
  * Thin helpers for reading Home Assistant state and calling services from a
  * card. Kept separate from rendering so cards can be tested against a
  * plain mock `hass` object instead of a real Home Assistant frontend.
+ *
+ * `hass` is intentionally typed `any` here: the real Home Assistant
+ * frontend's `hass` object is large and its shape isn't published as a
+ * package type, so modeling it fully in JSDoc isn't worth it for a handful
+ * of thin accessors — these functions only ever touch `states`,
+ * `callService`, and `callWS`.
  */
 
 /**
  * Reads an entity's current state string, or `fallback` if the entity id
  * is falsy, `hass` is missing, or the entity doesn't exist.
  *
- * @param {object} hass
+ * @param {any} hass
  * @param {string} [entityId]
  * @param {*} [fallback]
  * @returns {string|*}
@@ -22,7 +28,7 @@ export function getState(hass, entityId, fallback) {
  * Reads an entity's current state as a number, or `fallback` if missing or
  * not parseable as a finite number.
  *
- * @param {object} hass
+ * @param {any} hass
  * @param {string} [entityId]
  * @param {*} [fallback]
  * @returns {number|*}
@@ -52,7 +58,7 @@ export function fireMoreInfo(el, entityId) {
 /**
  * Calls a Home Assistant service.
  *
- * @param {object} hass
+ * @param {any} hass
  * @param {string} domain
  * @param {string} service
  * @param {object} [data]
@@ -64,7 +70,7 @@ export function callService(hass, domain, service, data) {
 /**
  * Presses a `button` domain entity.
  *
- * @param {object} hass
+ * @param {any} hass
  * @param {string} [entityId]
  */
 export function pressButton(hass, entityId) {
