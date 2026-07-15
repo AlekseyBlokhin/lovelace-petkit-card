@@ -1,0 +1,116 @@
+blueprint:
+  name: PETKIT Per-Cat Visit Duration Tracker
+  description: >
+    Splits a PetKit litter box's shared per-visit duration into a separate
+    input_number per cat, based on which cat the device reports as having
+    used the box most recently a few seconds after each visit. Each target
+    input_number's own state history becomes that cat's data source for the
+    lovelace-petkit-card chart and analytics — no other helper entities
+    needed, and no per-cat automation editing required.
+  domain: automation
+  source_url: https://github.com/AlekseyBlokhin/lovelace-petkit-card/blob/main/blueprints/automation/petkit_per_cat_visit_tracker.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    sensors:
+      name: PetKit sensors
+      icon: mdi:cat
+      input:
+        total_use_entity:
+          name: Total Use sensor
+          description: The sensor that bumps by one visit's duration on every use.
+          selector:
+            entity:
+              domain: sensor
+        last_used_by_entity:
+          name: Last Used By sensor
+          description: The sensor reporting which cat used the box most recently.
+          selector:
+            entity:
+              domain: sensor
+    cats:
+      name: Cats
+      icon: mdi:paw
+      input:
+        cat_mapping:
+          name: Cat name to duration helper mapping
+          description: >
+            One row per cat. "Cat name" must exactly match this cat's value
+            as reported by the Last Used By sensor. "Duration helper" is the
+            input_number this cat's visit duration gets written to.
+          selector:
+            object:
+              multiple: true
+              label_field: cat_name
+              description_field: duration_helper
+              fields:
+                cat_name:
+                  label: Cat name
+                  selector:
+                    text: {}
+                duration_helper:
+                  label: Duration helper (input_number)
+                  selector:
+                    entity:
+                      domain: input_number
+    settings:
+      name: Settings
+      icon: mdi:cog
+      collapsed: true
+      input:
+        settle_delay:
+          name: Settle delay
+          description: >
+            Wait this long after Total Use changes before reading Last Used
+            By. Works around a known PetKit-integration race condition where
+            Last Used By can lag Total Use by up to ~1s after the same event.
+          default: 3
+          selector:
+            number: { min: 0, max: 30, unit_of_measurement: s, mode: box }
+        max_valid_delta:
+          name: Max valid visit duration
+          description: >
+            Deltas above this (or non-positive, e.g. the device's midnight
+            counter reset) are ignored.
+          default: 1800
+          selector:
+            number: { min: 30, max: 7200, unit_of_measurement: s, mode: box }
+
+mode: queued
+max: 10
+max_exceeded: silent
+
+variables:
+  cats: !input cat_mapping
+  last_used_by_entity: !input last_used_by_entity
+  max_delta: !input max_valid_delta
+
+triggers:
+  - trigger: state
+    entity_id: !input total_use_entity
+
+conditions:
+  - condition: template
+    value_template: >
+      {% set delta = (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) %}
+      {{ delta > 0 and delta < max_delta }}
+
+actions:
+  - variables:
+      delta: "{{ (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) }}"
+  - delay:
+      seconds: !input settle_delay
+  - variables:
+      visiting_cat: "{{ states(last_used_by_entity) }}"
+  - repeat:
+      for_each: "{{ cats }}"
+      sequence:
+        - if:
+            - condition: template
+              value_template: "{{ repeat.item.cat_name == visiting_cat }}"
+          then:
+            - action: input_number.set_value
+              target:
+                entity_id: "{{ repeat.item.duration_helper }}"
+              data:
+                value: "{{ delta }}"
