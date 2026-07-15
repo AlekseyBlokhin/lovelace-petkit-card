@@ -332,12 +332,13 @@ export class PetkitPuramaxCard extends HTMLElement {
     const usageBody = this.shadowRoot.getElementById('usage-body');
     if (!area) return;
 
-    if (this._loadingChart) {
-      area.innerHTML = '<div class="loading">Loading…</div>';
-      if (recordsList) recordsList.innerHTML = '';
-      if (usageBody) usageBody.innerHTML = '<div class="loading">Loading…</div>';
-      return;
-    }
+    // Deliberately no "Loading…" interstitial: clearing the chart/usage/
+    // records content to a placeholder and back on every fetch caused a
+    // visible flicker when paging through days quickly (the fetch usually
+    // resolves faster than a human can perceive a placeholder frame as
+    // anything but a flash). Instead, leave whatever's already on screen
+    // alone until the new data actually arrives, then swap it in directly.
+    if (this._loadingChart) return;
 
     const cfg = this._config;
     const data = this._chartData || {};
@@ -493,11 +494,11 @@ export class PetkitPuramaxCard extends HTMLElement {
     const grid = this.shadowRoot.getElementById('analytics-grid');
     const banner = this.shadowRoot.getElementById('decline-banner');
     if (!grid) return;
-    if (this._loadingAnalytics || !this._analytics) {
-      grid.innerHTML = '<div class="loading">Loading…</div>';
-      if (banner) banner.innerHTML = '';
-      return;
-    }
+    // Same no-flicker rationale as _renderChartArea (see its comment): keep
+    // whatever's already rendered until fresh analytics resolve. On first
+    // mount that just means the grid stays empty for a moment, which reads
+    // as a normal load rather than a flashing placeholder.
+    if (this._loadingAnalytics || !this._analytics) return;
     const cfg = this._config;
     const threshold = (cfg.decline_threshold_pct || DEFAULT_DECLINE_THRESHOLD_PCT) / 100;
     const warnings = [];

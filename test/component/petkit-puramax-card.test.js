@@ -307,6 +307,60 @@ describe('PetkitPuramaxCard: rendering', () => {
   });
 });
 
+describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {
+  it('keeps the previous day\'s chart on screen instead of clearing to a loading placeholder', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+
+    // A controllable, never-auto-resolving callWS so we can inspect the DOM
+    // mid-fetch, i.e. exactly the window that used to flash "Loading…".
+    let resolveFirst;
+    const firstFetch = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const hass = {
+      states: { 'sensor.test_petkit_error': { state: 'no_error' } },
+      // Default resolves instantly so the concurrent _loadAnalytics() fetch
+      // (triggered by the same `hass` setter) doesn't hang -- only the
+      // specific call under test (_loadDay's, queued below) is held open.
+      callWS: vi.fn().mockResolvedValue({}).mockReturnValueOnce(firstFetch),
+      callService: vi.fn(),
+    };
+    card.hass = hass;
+
+    // Still mid-flight: no "Loading…" text should ever have been rendered,
+    // and no element carries the (now-removed) .loading class.
+    expect(card.shadowRoot.querySelector('.loading')).toBeNull();
+    expect(card.shadowRoot.textContent).not.toContain('Loading');
+
+    resolveFirst({});
+    await flush();
+
+    // Now trigger a day change with a fetch that again never resolves during
+    // this assertion window -- the chart area/usage/records must still show
+    // *something other than a loading placeholder* the instant the click
+    // fires, not a cleared/blank flash.
+    let resolveSecond;
+    hass.callWS.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSecond = resolve;
+      }),
+    );
+    card.shadowRoot.getElementById('prev-day').dispatchEvent(new Event('click', { bubbles: true }));
+
+    expect(card.shadowRoot.querySelector('.loading')).toBeNull();
+    expect(card.shadowRoot.textContent).not.toContain('Loading');
+    // The chart area keeps its prior real content (an empty-note, since
+    // there were no visits) rather than being blanked out mid-fetch.
+    expect(card.shadowRoot.getElementById('chart-area').innerHTML.trim()).not.toBe('');
+
+    resolveSecond({});
+    await flush();
+    expect(card.shadowRoot.querySelector('.loading')).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Regression: this project must stay 100% generic — no card or lib module
 // should ever hardcode a concrete entity id (or any of the original
