@@ -8,7 +8,11 @@
  * config object is shallow-merged over this map (config wins).
  *
  * A value of `null` means "don't show a Working Records row for this event"
- * (used for the device's own "nothing has happened yet" placeholder state).
+ * (used for the device's own "nothing has happened yet" placeholder state,
+ * and for the generic HA special-states `unavailable`/`unknown`, which can
+ * show up on any entity, e.g. during a restart or a brief connectivity
+ * blip, and are noise rather than a real device event). A user can hide any
+ * other noisy state the same way via their own `event_labels` config.
  *
  * @type {Record<string, string|null>}
  */
@@ -17,6 +21,8 @@ export const DEFAULT_EVENT_LABELS = {
   manual_odor_completed: 'Manual odor removal done',
   auto_cleaning_completed: 'Auto cleaning done',
   no_events_yet: null,
+  unavailable: null,
+  unknown: null,
 };
 
 /** Default card title shown when config doesn't set one. */

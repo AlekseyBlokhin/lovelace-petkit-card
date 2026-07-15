@@ -380,6 +380,50 @@ describe('PetkitPuramaxCard: rendering', () => {
   });
 });
 
+describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => {
+  it('hides unavailable/unknown/no_events_yet by default, showing only real device events', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'no_events_yet', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'unavailable', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+      { s: 'unknown', lu: Math.floor(today9am.getTime() / 1000) + 120 },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 180 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+  });
+
+  it('a user can hide any other noisy state themselves via event_labels: null (the general mechanism)', async () => {
+    const cfg = baseConfig({ event_labels: { some_noisy_state: null } });
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'some_noisy_state', lu: Math.floor(today9am.getTime() / 1000) },
+      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 60 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+  });
+});
+
 describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', () => {
   it('keeps the previous day\'s chart on screen instead of clearing to a loading placeholder', async () => {
     const cfg = baseConfig();
