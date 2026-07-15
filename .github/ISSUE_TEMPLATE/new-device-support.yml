@@ -1,0 +1,83 @@
+name: New device support request
+description: Ask for a PETKIT device other than the PURAMAX to be supported.
+title: "[New device] "
+labels: ["new-device"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This card currently only supports the **PETKIT PURAMAX** — the
+        maintainer only owns that device, so supporting anything else needs
+        data from someone who actually has it. Please fill in as much of
+        this as you can; the entity dump and example attributes are the
+        most important parts.
+
+  - type: input
+    id: device_model
+    attributes:
+      label: Exact PetKit device model/name
+      placeholder: "e.g. PETKIT PURA X, PETKIT Fresh Element Infinity, PETKIT Eversweet 3 Pro"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: integration
+    attributes:
+      label: Which Home Assistant integration exposes this device?
+      options:
+        - RobertD502/home-assistant-petkit
+        - Jezza34000/homeassistant_petkit
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: integration_other
+    attributes:
+      label: If "Other", which integration?
+    validations:
+      required: false
+
+  - type: textarea
+    id: entity_dump
+    attributes:
+      label: Every entity this device exposes in Home Assistant
+      description: >
+        Go to Settings → Devices & Services → find your device → open it,
+        and list every entity shown, OR use the States developer tool
+        (Developer Tools → States) filtered to your device and paste the
+        table. Include entity ids, not just friendly names.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: example_attributes
+    attributes:
+      label: Example state/attribute JSON for 2-3 key sensors
+      description: >
+        In Developer Tools → States, click one of the device's more
+        interesting sensors and paste its "Attributes" panel. Repeat for
+        2-3 sensors that seem most relevant to what the card should show.
+      render: json
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing_to_test
+    attributes:
+      label: Testing
+      options:
+        - label: I'm willing to test a work-in-progress card build against my real device (this is important — the maintainer has no way to verify anything without a tester).
+          required: false
+
+  - type: textarea
+    id: existing_setup
+    attributes:
+      label: Existing dashboard/automation for this device (optional)
+      description: >
+        If you've already hand-built a dashboard card or automation for
+        this device, paste it — it's the best signal for what data
+        actually matters to real users.
+    validations:
+      required: false

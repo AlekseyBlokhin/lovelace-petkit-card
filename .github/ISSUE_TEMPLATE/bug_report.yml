@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in the card isn't working correctly.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much
+        of this as you can — it's the difference between a fast fix and a
+        bug that sits open for lack of information to reproduce it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Step by step, as precisely as you can.
+      placeholder: |
+        1. Add the card with this config...
+        2. Click...
+        3. See...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Card configuration (YAML)
+      description: Your card's config, with any personal entity ids fine to leave as-is.
+      render: yaml
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Core version
+      placeholder: "2026.7.2"
+    validations:
+      required: true
+
+  - type: input
+    id: hacs_version
+    attributes:
+      label: HACS version (if installed via HACS)
+      placeholder: "e.g. 2.0.5"
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / app
+      placeholder: "e.g. Chrome 128 desktop, Home Assistant Companion Android"
+    validations:
+      required: true
+
+  - type: textarea
+    id: console_errors
+    attributes:
+      label: Browser console errors
+      description: Open DevTools (F12) → Console, reproduce the bug, and paste anything relevant.
+      render: text
+    validations:
+      required: false
