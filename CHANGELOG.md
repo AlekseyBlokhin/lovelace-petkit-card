@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-15
+
+First public release. Pre-1.0: single device supported, the editor and
+Blueprint are newly built and not yet battle-tested beyond the maintainer's
+own instance, so the config surface may still shift before 1.0.
+
 ### Added
 
 - `petkit-puramax-card`: device status chips, controls, day-switchable
