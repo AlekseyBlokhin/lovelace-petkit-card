@@ -1,6 +1,6 @@
 {
   "name": "lovelace-petkit-card",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Home Assistant Lovelace custom card for PETKIT smart litter boxes: device status, controls, and per-cat visit analytics.",
   "type": "module",
   "license": "MIT",

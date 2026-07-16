@@ -629,26 +629,39 @@ export class PetkitPuramaxCard extends HTMLElement {
     const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
     // Coordinators/integrations occasionally flicker an entity to
-    // unavailable/unknown and back to whatever value it held before the
-    // blip -- that recovery is a re-assertion of the same event, not a new
-    // one, so it must not become a second Working Records row. Comparing
-    // only against the immediately preceding point would miss this (the
-    // preceding point is the hidden "unavailable" itself), so track the
-    // last real value shown instead and skip an exact repeat of it.
-    let lastShownVal = null;
+    // unavailable/unknown and back to whatever value it held right before
+    // the blip -- that recovery is a re-assertion of the same event, not a
+    // new one, so it must not become a second Working Records row. This is
+    // deliberately narrower than "same value as the last one we saw": two
+    // GENUINELY separate real events can legitimately carry identical text
+    // with nothing hidden between them (e.g. the same cat visiting twice
+    // in a row produces two literal "<cat> used the litter box" points
+    // back to back) -- collapsing those would silently drop a real visit's
+    // narration. So this only fires when the value repeats AND the point
+    // immediately before it (in raw arrival order, before any filtering)
+    // was itself a hidden placeholder state -- precisely the
+    // unavailable-then-recovers-to-the-same-value signature, not "the
+    // same cat used the box again."
+    let lastRealVal = null;
+    let prevWasHidden = false;
     eventHist.forEach((point) => {
       const val = point.s ?? point.state;
       const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
       if (!val || !ts) return;
-      if (val in eventLabels && eventLabels[val] === null) return;
+      if (val in eventLabels && eventLabels[val] === null) {
+        prevWasHidden = true;
+        return;
+      }
+      const isFlickerRecovery = prevWasHidden && val === lastRealVal;
+      lastRealVal = val;
+      prevWasHidden = false;
+      if (isFlickerRecovery) return;
       // last_event's own "<cat> used the litter box" narration and the
       // total_use-derived stem above can both describe the exact same
       // physical visit (two different sensors, one event) -- when the
       // richer stem row (it has duration) already covers it, drop this
       // one rather than showing the same visit twice.
       if (isDuplicateVisitNarration({ ts, rawState: val, visits, cats: cfg.cats })) return;
-      if (val === lastShownVal) return;
-      lastShownVal = val;
       const label = eventLabels[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       records.push({ ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: label });
     });

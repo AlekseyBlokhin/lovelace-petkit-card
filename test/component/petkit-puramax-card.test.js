@@ -559,6 +559,87 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
     expect(rows.length).toBe(1);
     expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A Used The Litter Box');
   });
+
+  it('REGRESSION: a flicker-recovery is still suppressed even when the value in between was itself dedupe-suppressed as a visit narration', async () => {
+    // Real-world sequence this was diagnosed from: two real visits by the
+    // same cat back to back (each correctly suppressed as a duplicate
+    // visit narration, since total_use already covers them), then later
+    // an unavailable blip recovers to that same stale "<cat> used the
+    // litter box" text with NO matching visit nearby -- that recovery must
+    // still be recognized as noise, not a third, phantom real row. Naively
+    // tracking "last value we rendered a row for" breaks this, because the
+    // two suppressed rows never update that tracker.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const t0 = Math.floor(new Date().setHours(5, 12, 51, 0) / 1000);
+    const t1 = Math.floor(new Date().setHours(5, 18, 22, 0) / 1000);
+    const t2 = Math.floor(new Date().setHours(5, 33, 51, 0) / 1000); // unavailable blip
+    const t3 = Math.floor(new Date().setHours(5, 34, 22, 0) / 1000); // recovers to stale text, no nearby visit
+
+    const totalUsePoints = [
+      { s: '32', lu: t0 - 60 },
+      { s: '80', lu: t0 }, // visit 1: 48s
+      { s: '233', lu: t1 }, // visit 2: 153s
+      // no further total_use change around t3 -- it's a pure flicker, not a visit
+    ];
+    const lastEventHistory = [
+      { s: 'Cat A used the litter box', lu: t0 },
+      { s: 'Cat A used the litter box', lu: t1 }, // genuinely distinct 2nd visit, same text, no hidden point between
+      { s: 'unavailable', lu: t2 },
+      { s: 'Cat A used the litter box', lu: t3 }, // flicker recovery of the SAME stale value -- must be suppressed
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    // Both real visits show up once each (as the richer stem row, not the
+    // narration -- narration-deduped away), and the later phantom flicker
+    // recovery does not appear as a third "Cat A Used The Litter Box" row.
+    expect(texts).toContain('Cat A just spent 48s in the litter box');
+    expect(texts).toContain('Cat A just spent 2m33s in the litter box');
+    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(0);
+    expect(rows.length).toBe(2);
+  });
+
+  it('still shows two separate narration rows for two genuinely consecutive same-text visits with no total_use match (fallback path)', async () => {
+    // Same shape as above, but without total_use data at all (e.g. fetch
+    // failed) -- both real narrations must survive as their own rows,
+    // since there's no flicker (no hidden point) between them.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const t0 = Math.floor(new Date().setHours(5, 12, 51, 0) / 1000);
+    const t1 = Math.floor(new Date().setHours(5, 18, 22, 0) / 1000);
+    const lastEventHistory = [
+      { s: 'Cat A used the litter box', lu: t0 },
+      { s: 'Cat A used the litter box', lu: t1 },
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(2);
+  });
 });
 
 describe('PetkitPuramaxCard: no-visit alert', () => {
