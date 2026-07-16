@@ -455,60 +455,57 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
   });
 });
 
-describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-flicker regression)', () => {
-  it('does not add a second row when last_event flickers unavailable and recovers to the same value', async () => {
-    // Real-world pattern: a transient coordinator hiccup marks the entity
-    // unavailable for ~30s, then it "recovers" by re-reporting the exact
-    // same event string it already had -- that recovery is not a new event
-    // and must not become a duplicate Working Records row.
+describe('PetkitPuramaxCard: Working Records has one source of truth for visits (refs #13, #14, #16)', () => {
+  // Working Records used to merge total_use-derived visits AND last_event's
+  // own "<cat> used the litter box" narration, then tried to de-duplicate
+  // the two when they described the same event -- fragile, and it kept
+  // producing new bugs (issues #13, #14). It's simpler and more robust to
+  // never show the narration at all: total_use/last_used_by is the single
+  // source of truth for "a visit happened" (it's also richer -- it has
+  // duration), so last_event's redundant narration is unconditionally
+  // excluded, regardless of whether a matching total_use visit exists.
+
+  it('never shows a last_event "<cat> used the litter box" narration, even with no matching total_use visit', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
     today9am.setHours(9, 0, 0, 0);
-    const lastEventHistory = [
-      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) },
-      { s: 'unavailable', lu: Math.floor(today9am.getTime() / 1000) + 60 },
-      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) + 120 },
-      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 180 },
-    ];
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
-    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
     card.hass = hass;
     await flush();
 
-    const rows = card.shadowRoot.querySelectorAll('.record-row');
-    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(1);
-    expect(rows.length).toBe(2);
+    expect(card.shadowRoot.querySelectorAll('.record-row').length).toBe(0);
   });
 
-  it('still shows two separate rows for two genuinely distinct same-text events with no flicker between them', async () => {
+  it('also hides an "Unknown used the litter box" narration (device failed to identify the cat), not just recognized cat names', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
     today9am.setHours(9, 0, 0, 0);
-    const lastEventHistory = [
-      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) },
-      { s: 'maintenance_mode', lu: Math.floor(today9am.getTime() / 1000) + 60 },
-      { s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) + 120 },
-    ];
+    const lastEventHistory = [{ s: 'Unknown used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
-    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
     card.hass = hass;
     await flush();
 
-    const rows = card.shadowRoot.querySelectorAll('.record-row');
-    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(2);
+    expect(card.shadowRoot.querySelectorAll('.record-row').length).toBe(0);
   });
 
-  it('REGRESSION: does not show a visit twice as both "<cat> used the litter box" and "<cat> just spent Ns..." (issue #13)', async () => {
-    // total_use and last_event each independently report the SAME real
-    // visit -- total_use's reconstruction (with duration) is the richer
-    // one, so the last_event narration must be suppressed, not shown as a
-    // second row.
+  it('a real visit shows exactly once, as the richer total_use-derived stem row, never as the last_event narration too', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -519,7 +516,7 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
       { s: '0', lu: visitTs - 60 },
       { s: '146', lu: visitTs }, // 2m26s visit
     ];
-    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs + 2 }]; // 2s write-order lag
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs + 2 }]; // real write-order lag
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
       if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
@@ -538,17 +535,36 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
     expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A just spent 2m26s in the litter box');
   });
 
-  it('keeps the last_event narration as a fallback when there is no matching total_use visit (e.g. total_use fetch failed)', async () => {
-    const cfg = baseConfig();
+  it('a visit total_use can\'t attribute to any configured cat still shows once, labeled "Unknown cat"', async () => {
+    // The device's own AI cat-recognition can fail (real observed state:
+    // last_used_by reports "unknown_pet", outside the configured cats).
+    // The visit still really happened -- total_use is the single source of
+    // truth for that -- so it must not vanish from Working Records just
+    // because the identity couldn't be resolved.
+    const cfg = baseConfig({
+      device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
+      cats: [
+        { name: 'Cat A', color: '#111111' },
+        { name: 'Cat B', color: '#222222' },
+      ],
+    });
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
     today9am.setHours(9, 0, 0, 0);
-    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
+    const visitTs = Math.floor(today9am.getTime() / 1000);
+    const totalUsePoints = [
+      { s: '0', lu: visitTs - 60 },
+      { s: '43', lu: visitTs },
+    ];
+    const lastUsedByPoints = [{ s: 'unknown_pet', lu: visitTs }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
-      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
-        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_used_by')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_used_by': lastUsedByPoints });
       }
       return Promise.resolve({});
     });
@@ -557,43 +573,30 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     expect(rows.length).toBe(1);
-    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A Used The Litter Box');
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Unknown cat just spent 43s in the litter box');
+    // ...but does NOT appear as a chart stem or count toward any named cat's usage total (unaffected by this change).
+    expect(card.shadowRoot.querySelectorAll('.visit-point').length).toBe(0);
+    expect(card.shadowRoot.getElementById('usage-body').textContent).toContain('0 times');
   });
 
-  it('REGRESSION: a flicker-recovery is still suppressed even when the value in between was itself dedupe-suppressed as a visit narration', async () => {
-    // Real-world sequence this was diagnosed from: two real visits by the
-    // same cat back to back (each correctly suppressed as a duplicate
-    // visit narration, since total_use already covers them), then later
-    // an unavailable blip recovers to that same stale "<cat> used the
-    // litter box" text with NO matching visit nearby -- that recovery must
-    // still be recognized as noise, not a third, phantom real row. Naively
-    // tracking "last value we rendered a row for" breaks this, because the
-    // two suppressed rows never update that tracker.
+  it('still suppresses a genuine unavailable-flicker duplicate for a non-visit device event', async () => {
+    // The flicker-dedupe (v0.3.0) is still needed for events other than
+    // visit narrations, e.g. two "Auto cleaning done" entries where the
+    // second is just a coordinator hiccup re-asserting the same value.
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
-    const t0 = Math.floor(new Date().setHours(5, 12, 51, 0) / 1000);
-    const t1 = Math.floor(new Date().setHours(5, 18, 22, 0) / 1000);
-    const t2 = Math.floor(new Date().setHours(5, 33, 51, 0) / 1000); // unavailable blip
-    const t3 = Math.floor(new Date().setHours(5, 34, 22, 0) / 1000); // recovers to stale text, no nearby visit
-
-    const totalUsePoints = [
-      { s: '32', lu: t0 - 60 },
-      { s: '80', lu: t0 }, // visit 1: 48s
-      { s: '233', lu: t1 }, // visit 2: 153s
-      // no further total_use change around t3 -- it's a pure flicker, not a visit
-    ];
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
     const lastEventHistory = [
-      { s: 'Cat A used the litter box', lu: t0 },
-      { s: 'Cat A used the litter box', lu: t1 }, // genuinely distinct 2nd visit, same text, no hidden point between
-      { s: 'unavailable', lu: t2 },
-      { s: 'Cat A used the litter box', lu: t3 }, // flicker recovery of the SAME stale value -- must be suppressed
+      { s: 'auto_cleaning_completed', lu: t0 },
+      { s: 'unavailable', lu: t0 + 60 },
+      { s: 'auto_cleaning_completed', lu: t0 + 120 }, // flicker recovery, must be suppressed
+      { s: 'maintenance_mode', lu: t0 + 180 },
     ];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
-      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
-        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
-      }
       if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
         return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
       }
@@ -604,27 +607,21 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    // Both real visits show up once each (as the richer stem row, not the
-    // narration -- narration-deduped away), and the later phantom flicker
-    // recovery does not appear as a third "Cat A Used The Litter Box" row.
-    expect(texts).toContain('Cat A just spent 48s in the litter box');
-    expect(texts).toContain('Cat A just spent 2m33s in the litter box');
-    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(0);
+    expect(texts.filter((t) => t === 'Auto cleaning done').length).toBe(1);
     expect(rows.length).toBe(2);
   });
 
-  it('still shows two separate narration rows for two genuinely consecutive same-text visits with no total_use match (fallback path)', async () => {
-    // Same shape as above, but without total_use data at all (e.g. fetch
-    // failed) -- both real narrations must survive as their own rows,
-    // since there's no flicker (no hidden point) between them.
+  it('shows two separate rows for two genuinely distinct occurrences of the same non-visit event with no flicker between them', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
-    const t0 = Math.floor(new Date().setHours(5, 12, 51, 0) / 1000);
-    const t1 = Math.floor(new Date().setHours(5, 18, 22, 0) / 1000);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
     const lastEventHistory = [
-      { s: 'Cat A used the litter box', lu: t0 },
-      { s: 'Cat A used the litter box', lu: t1 },
+      { s: 'auto_cleaning_completed', lu: t0 },
+      { s: 'maintenance_mode', lu: t0 + 60 },
+      { s: 'auto_cleaning_completed', lu: t0 + 120 },
     ];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
@@ -638,7 +635,7 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(2);
+    expect(texts.filter((t) => t === 'Auto cleaning done').length).toBe(2);
   });
 });
 

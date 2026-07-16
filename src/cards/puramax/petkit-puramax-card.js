@@ -1,12 +1,6 @@
 import { formatDuration, formatHoursAgo, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import {
-  buildHistoryRequest,
-  deltaEvents,
-  catChangeEvents,
-  attributeCats,
-  isDuplicateVisitNarration,
-} from '../../lib/history.js';
+import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
@@ -18,6 +12,7 @@ import {
   DEFAULT_DECLINE_THRESHOLD_PCT,
   DEFAULT_NO_VISIT_ALERT_HOURS,
   MAX_VALID_VISIT_SECONDS,
+  VISIT_NARRATION_PATTERN,
   CHART_WIDTH,
   CHART_HEIGHT,
   CHART_PADDING,
@@ -189,10 +184,12 @@ export class PetkitPuramaxCard extends HTMLElement {
   //    integrations don't emit a new last_used_by state when the same cat
   //    visits twice in a row.
   //
-  // Unlike the automation this replaces, there's no race condition to guard
-  // against here: history is only ever read well after both sensors have
-  // already settled, whereas the automation's race was about reading LIVE
-  // state immediately at trigger time, before a lagging second write landed.
+  // Unlike the automation this replaces, there's no race condition from
+  // reading LIVE state mid-write here (history is only ever read after the
+  // fact) -- but there IS a real, consistently observed write-ORDER lag
+  // (`last_used_by`'s write for a visit lands a few ms after `total_use`'s,
+  // never before), which `attributeCats`'s tolerance window accounts for.
+  // See CAT_ATTRIBUTION_TOLERANCE_MS in history.js for the measured data.
   async _fetchVisits({ start, end }) {
     const cfg = this._config;
     const totalUseReq = buildHistoryRequest({
@@ -243,11 +240,13 @@ export class PetkitPuramaxCard extends HTMLElement {
 
     const catsByName = new Map(cfg.cats.map((c) => [c.name, c]));
     // A duration event with no resolvable cat (e.g. the very first visit
-    // ever, before any last_used_by value has been recorded) can't be
-    // rendered against a specific cat and is dropped rather than guessed.
-    return attributed
-      .filter((e) => catsByName.has(e.cat))
-      .map((e) => ({ cat: catsByName.get(e.cat), duration: e.value, ts: e.ts }));
+    // ever, before any last_used_by value has been recorded, or the device
+    // itself failed to identify the cat) still represents a real visit --
+    // this is the single source of truth for "did a visit happen," so it's
+    // kept (with `cat: null`) rather than silently dropped. Callers that
+    // only care about per-*named*-cat data (the chart stems, usage counts,
+    // analytics) filter these out themselves; Working Records shows them.
+    return attributed.map((e) => ({ cat: catsByName.get(e.cat) || null, duration: e.value, ts: e.ts }));
   }
 
   // ---------- data loading ----------
@@ -507,7 +506,13 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (this._loadingChart) return;
 
     const cfg = this._config;
-    const visits = (this._chartVisits || []).slice().sort((a, b) => a.ts - b.ts);
+    // `allVisits` is the single source of truth for "a real visit
+    // happened" (used by Working Records below, including visits that
+    // couldn't be attributed to a configured cat); `visits` is the subset
+    // attributable to a named cat, which is all the chart/usage-count/
+    // tooltip code below cares about.
+    const allVisits = (this._chartVisits || []).slice().sort((a, b) => a.ts - b.ts);
+    const visits = allVisits.filter((v) => v.cat);
 
     // Chart: 0-24h stem plot
     const width = CHART_WIDTH;
@@ -619,12 +624,19 @@ export class PetkitPuramaxCard extends HTMLElement {
       `;
     }
 
-    // Working records: merge visit events + last_event changes
-    const records = visits.map((v) => ({
+    // Working Records has exactly one source of truth for "a real visit
+    // happened": the total_use/last_used_by reconstruction (`allVisits`,
+    // including visits that couldn't be attributed to a configured cat --
+    // it's still a real visit). last_event is used ONLY for genuinely
+    // distinct device-status events below (maintenance/cleaning/odor/
+    // errors); its own "<cat> used the litter box" narration is always
+    // redundant with a row here and is unconditionally excluded, not
+    // merged in and then de-duplicated -- see VISIT_NARRATION_PATTERN.
+    const records = allVisits.map((v) => ({
       ts: v.ts,
-      icon: 'mdi:cat',
-      color: v.cat.color,
-      text: `${v.cat.name} just spent ${formatDuration(v.duration)} in the litter box`,
+      icon: v.cat ? 'mdi:cat' : 'mdi:help-circle-outline',
+      color: v.cat ? v.cat.color : 'var(--secondary-text-color)',
+      text: `${v.cat ? v.cat.name : 'Unknown cat'} just spent ${formatDuration(v.duration)} in the litter box`,
     }));
     const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
@@ -634,14 +646,12 @@ export class PetkitPuramaxCard extends HTMLElement {
     // new one, so it must not become a second Working Records row. This is
     // deliberately narrower than "same value as the last one we saw": two
     // GENUINELY separate real events can legitimately carry identical text
-    // with nothing hidden between them (e.g. the same cat visiting twice
-    // in a row produces two literal "<cat> used the litter box" points
-    // back to back) -- collapsing those would silently drop a real visit's
-    // narration. So this only fires when the value repeats AND the point
+    // with nothing hidden between them (e.g. two "Auto cleaning done"
+    // events on the same day) -- collapsing those would silently drop a
+    // real event. So this only fires when the value repeats AND the point
     // immediately before it (in raw arrival order, before any filtering)
     // was itself a hidden placeholder state -- precisely the
-    // unavailable-then-recovers-to-the-same-value signature, not "the
-    // same cat used the box again."
+    // unavailable-then-recovers-to-the-same-value signature.
     let lastRealVal = null;
     let prevWasHidden = false;
     eventHist.forEach((point) => {
@@ -656,12 +666,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       lastRealVal = val;
       prevWasHidden = false;
       if (isFlickerRecovery) return;
-      // last_event's own "<cat> used the litter box" narration and the
-      // total_use-derived stem above can both describe the exact same
-      // physical visit (two different sensors, one event) -- when the
-      // richer stem row (it has duration) already covers it, drop this
-      // one rather than showing the same visit twice.
-      if (isDuplicateVisitNarration({ ts, rawState: val, visits, cats: cfg.cats })) return;
+      if (VISIT_NARRATION_PATTERN.test(val)) return;
       const label = eventLabels[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       records.push({ ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: label });
     });

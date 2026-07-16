@@ -21,7 +21,10 @@ sensors your PetKit integration already provides.
 - A day-switchable per-cat visit chart (a 0-24h "stem plot"), reconstructed
   from the device's `total_use`/`last_used_by` sensors — no per-cat helper
   entities needed.
-- A merged Working Records timeline (visits + device events).
+- A Working Records timeline: every real visit (from the same `total_use`/
+  `last_used_by` reconstruction as the chart — a single source of truth,
+  not a second independent guess) plus genuinely distinct device events
+  (maintenance, cleaning, odor removal, errors).
 - Today / 3-day-avg / 7-day-avg per-cat analytics, with a decline/spike
   warning banner.
 - A per-cat "no visit in N hours" alert banner (configurable, default 8h),
@@ -155,6 +158,23 @@ already fetches:
    every time and attribute it to the *previous* visit's cat instead. See
    `CAT_ATTRIBUTION_TOLERANCE_MS` in `src/lib/history.js` for the real
    captured data this was measured from.
+3. **Glitch filtering**: a positive `total_use` delta that the very next
+   reading undoes exactly (the value returns to precisely its pre-delta
+   level, usually within seconds) is discarded rather than read as a real
+   visit — a genuine increment is permanent and never reverts like that.
+
+A visit that can't be attributed to any configured cat (the device's own
+cat-recognition can fail) still appears in Working Records, labeled
+"Unknown cat" — it's a real visit, not silently dropped — but isn't plotted
+on the chart or counted in any cat's totals, since those are inherently
+per-named-cat views.
+
+`device_entities.last_event`, when configured, contributes only genuinely
+distinct device-status events (maintenance, cleaning, odor removal,
+errors) to Working Records — never a second, redundant description of a
+visit. `total_use`/`last_used_by` is the single source of truth for "did a
+visit happen"; `last_event`'s own "`<cat>` used the litter box" narration
+of that same event is always excluded.
 
 ## Supported devices
 

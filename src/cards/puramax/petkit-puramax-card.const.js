@@ -25,6 +25,29 @@ export const DEFAULT_EVENT_LABELS = {
   unknown: null,
 };
 
+/**
+ * Matches `last_event` raw states that narrate a visit (e.g. "Whiskers used
+ * the litter box", "Unknown used the litter box") -- PURAMAX firmware's own
+ * vocabulary for "someone just used the box," as opposed to a genuinely
+ * distinct device-status event (maintenance, cleaning, odor removal,
+ * errors).
+ *
+ * Working Records has exactly one source of truth for "a real visit
+ * happened": the `total_use`/`last_used_by` reconstruction (it's richer --
+ * it carries duration, and every real visit produces a `total_use` delta
+ * whether or not the cat could be identified). A `last_event` narration is
+ * always redundant with that reconstruction, so it's unconditionally
+ * excluded from Working Records here rather than conditionally
+ * de-duplicated against nearby visits -- the two-sources-merged design that
+ * preceded this needed dedupe logic to reconcile the same event reported
+ * twice, which was fragile (see the git history of this file/card for the
+ * bugs that came from it). `event_labels` remains the mechanism for hiding
+ * any *other* noisy state.
+ *
+ * @type {RegExp}
+ */
+export const VISIT_NARRATION_PATTERN = / used the litter box$/;
+
 /** Default card title shown when config doesn't set one. */
 export const DEFAULT_TITLE = 'PETKIT PURAMAX';
 

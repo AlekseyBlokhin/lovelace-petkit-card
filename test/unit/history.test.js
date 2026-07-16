@@ -7,7 +7,6 @@ import {
   catChangeEvents,
   attributeCats,
   CAT_ATTRIBUTION_TOLERANCE_MS,
-  isDuplicateVisitNarration,
 } from '../../src/lib/history.js';
 
 describe('buildHistoryRequest', () => {
@@ -219,6 +218,80 @@ describe('deltaEvents', () => {
     expect(deltaEvents([{ s: '100', lu: 1000 }])).toEqual([]);
     expect(deltaEvents([])).toEqual([]);
     expect(deltaEvents(undefined)).toEqual([]);
+  });
+
+  // --------------------------------------------------------------------
+  // REGRESSION (refs #15): phantom visits from a transient counter glitch that
+  // self-corrects (reported live, 2026-07-16 -- two visits shown on the
+  // chart, neither present in the PetKit app). Real captured data:
+  //   22:36:20 -> 59, 23:21:53.94 -> 104 (+45, read as a visit),
+  //   23:22:12.23 -> 59 (19s later, EXACTLY back to the pre-delta value)
+  // and separately:
+  //   01:29:53 -> 244, 01:47:13.98 -> 294 (+50, read as a visit),
+  //   01:47:25.25 -> 244 (12s later, EXACTLY back to the pre-delta value)
+  // A real total_use increment is permanent; it only ever drops via a full
+  // counter reset (to near zero), never a partial "undo" back to an
+  // arbitrary prior reading. `lu` values below are epoch seconds as
+  // returned raw by the WS API (not yet *1000'd) -- deltaEvents does that
+  // internally via parseHistoryPoint.
+  // --------------------------------------------------------------------
+  describe('REGRESSION: a self-correcting glitch is not read as a visit', () => {
+    it('discards a positive delta that the very next reading undoes exactly (real captured case 1)', () => {
+      const hist = [
+        { s: '59', lu: 1783968980 },
+        { s: '104', lu: 1783971713.943688 },
+        { s: '59', lu: 1783971732.227337 },
+      ];
+      expect(deltaEvents(hist)).toEqual([]);
+    });
+
+    it('discards a positive delta that the very next reading undoes exactly (real captured case 2)', () => {
+      const hist = [
+        { s: '244', lu: 1783985393 },
+        { s: '294', lu: 1783986433.977865 },
+        { s: '244', lu: 1783986445.247189 },
+      ];
+      expect(deltaEvents(hist)).toEqual([]);
+    });
+
+    it('still keeps a real visit that is followed by ANOTHER real (larger) visit, not an exact undo', () => {
+      const hist = [
+        { s: '59', lu: 1000 },
+        { s: '104', lu: 2000 }, // +45, real
+        { s: '150', lu: 3000 }, // +46, real -- does not undo the previous reading
+      ];
+      expect(deltaEvents(hist)).toEqual([
+        { value: 45, ts: 2000000 },
+        { value: 46, ts: 3000000 },
+      ]);
+    });
+
+    it('does not confuse a genuine full counter reset (drops to near zero) with a glitch-undo', () => {
+      // A real visit followed by the device's own daily reset-to-zero must
+      // still count -- only an exact return to the specific PRE-delta
+      // reading is treated as a glitch, not any drop at all.
+      const hist = [
+        { s: '900', lu: 1000 },
+        { s: '945', lu: 2000 }, // +45, real visit
+        { s: '0', lu: 3000 }, // daily reset, unrelated value, not an undo
+      ];
+      expect(deltaEvents(hist)).toEqual([{ value: 45, ts: 2000000 }]);
+    });
+
+    it('only inspects the immediately following reading, not a later one', () => {
+      // If the "undo" isn't the very next point, the delta is real and
+      // kept -- this only catches the specific back-to-back glitch
+      // signature actually observed, not any later coincidental return to
+      // an old value.
+      const hist = [
+        { s: '59', lu: 1000 },
+        { s: '104', lu: 2000 }, // +45
+        { s: '150', lu: 3000 }, // +46, a real visit in between
+        { s: '59', lu: 4000 }, // drops back to 59 eventually, but not immediately after the +45
+      ];
+      const result = deltaEvents(hist, { minDelta: 0, maxDelta: 1800 });
+      expect(result.map((e) => e.value)).toEqual([45, 46]);
+    });
   });
 });
 
@@ -454,55 +527,3 @@ describe('attributeCats', () => {
   });
 });
 
-describe('isDuplicateVisitNarration', () => {
-  const cats = [{ name: 'Cat A' }, { name: 'Cat B' }];
-
-  it('flags a last_event narration as duplicate when a matching total_use visit exists within tolerance', () => {
-    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
-    expect(
-      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat A used the litter box', visits, cats }),
-    ).toBe(true);
-  });
-
-  it('still flags it when the narration lands a few ms after the visit (the real write-order lag)', () => {
-    const visits = [{ cat: { name: 'Cat A' }, ts: 1783999568254, duration: 84 }];
-    expect(
-      isDuplicateVisitNarration({
-        ts: 1783999568254 + 4, // 4ms later, matching real observed lag magnitude
-        rawState: 'Cat A used the litter box',
-        visits,
-        cats,
-      }),
-    ).toBe(true);
-  });
-
-  it('does not flag a raw state that is not a recognized "<cat> used the litter box" narration', () => {
-    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
-    expect(isDuplicateVisitNarration({ ts: 100000, rawState: 'maintenance_mode', visits, cats })).toBe(false);
-  });
-
-  it('does not flag a narration for a DIFFERENT cat than the nearby visit', () => {
-    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
-    expect(
-      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat B used the litter box', visits, cats }),
-    ).toBe(false);
-  });
-
-  it('does not flag a same-cat narration far outside the tolerance window (a genuinely separate mention)', () => {
-    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
-    expect(
-      isDuplicateVisitNarration({
-        ts: 100000 + 60000,
-        rawState: 'Cat A used the litter box',
-        visits,
-        cats,
-      }),
-    ).toBe(false);
-  });
-
-  it('returns false when there are no visits at all (e.g. total_use fetch failed) -- narration is kept as fallback', () => {
-    expect(
-      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat A used the litter box', visits: [], cats }),
-    ).toBe(false);
-  });
-});

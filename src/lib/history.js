@@ -103,6 +103,15 @@ export function pointsToEvents(historyForEntity, { filterPositive = true } = {})
  * transient coordinator hiccup between two real readings doesn't corrupt
  * the delta between them.
  *
+ * A positive delta immediately undone by the very next reading (the value
+ * drops back to EXACTLY its pre-delta level) is also discarded -- this is a
+ * real, observed device/write glitch (confirmed against live history: two
+ * phantom "visits" that never happened in the PetKit app, each reverted by
+ * the next reading within seconds), not a counter reset (which drops to
+ * near zero, not back to an arbitrary prior reading) and not a real visit
+ * (a genuine `total_use` increment is permanent). See `history.test.js` for
+ * the real captured data this was diagnosed from.
+ *
  * @param {Array<object>} historyForEntity
  * @param {{ minDelta?: number, maxDelta?: number }} [options]
  * @returns {Array<{ value: number, ts: number }>}
@@ -116,9 +125,10 @@ export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinit
   const events = [];
   for (let i = 1; i < points.length; i++) {
     const delta = points[i].value - points[i - 1].value;
-    if (delta > minDelta && delta < maxDelta) {
-      events.push({ value: delta, ts: points[i].ts });
-    }
+    if (delta <= minDelta || delta >= maxDelta) continue;
+    const next = points[i + 1];
+    if (next && next.value === points[i - 1].value) continue;
+    events.push({ value: delta, ts: points[i].ts });
   }
   return events;
 }
@@ -215,47 +225,3 @@ export function attributeCats(durationEvents, catEvents, { toleranceMs = CAT_ATT
   });
 }
 
-/**
- * How close a `last_event` "narration" point (e.g. a raw state of
- * `"<cat> used the litter box"`) may be to an already-reconstructed
- * `total_use`-derived visit for the same cat and still count as describing
- * that same physical visit, for de-duplication purposes. Reuses
- * `CAT_ATTRIBUTION_TOLERANCE_MS`'s reasoning/magnitude -- it's the same
- * device writing both signals for the same event, so the same real-world
- * write-order-lag bound applies.
- *
- * @type {number}
- */
-export const VISIT_NARRATION_DEDUPE_TOLERANCE_MS = CAT_ATTRIBUTION_TOLERANCE_MS;
-
-/**
- * Whether a `last_event` point narrating a specific cat's visit (raw state
- * exactly `"<cat.name> used the litter box"`) duplicates a visit already
- * present in `visits` (as returned by a card's `_fetchVisits`/similar) for
- * that same cat, within `toleranceMs`.
- *
- * Two different device sensors (`total_use` and `last_event`) each
- * independently report the same real visit -- `total_use`'s reconstruction
- * is richer (it carries duration), so when both exist for the same visit,
- * the `last_event` narration is the redundant one and should be dropped
- * from a merged timeline rather than shown as a second row.
- *
- * @param {object} params
- * @param {number} params.ts - the last_event point's timestamp (ms).
- * @param {string} params.rawState - the last_event point's raw state string.
- * @param {Array<{ cat: { name: string }, ts: number }>} params.visits
- * @param {Array<{ name: string }>} params.cats
- * @param {number} [params.toleranceMs]
- * @returns {boolean}
- */
-export function isDuplicateVisitNarration({
-  ts,
-  rawState,
-  visits,
-  cats,
-  toleranceMs = VISIT_NARRATION_DEDUPE_TOLERANCE_MS,
-}) {
-  const cat = cats.find((c) => rawState === `${c.name} used the litter box`);
-  if (!cat) return false;
-  return visits.some((v) => v.cat.name === cat.name && Math.abs(v.ts - ts) <= toleranceMs);
-}
