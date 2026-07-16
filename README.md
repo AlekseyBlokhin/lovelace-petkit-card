@@ -146,14 +146,15 @@ already fetches:
    identity actually changes — two visits by the same cat in a row don't
    produce a second history point. The card attributes each duration event
    to whichever cat was most recently reported *at or before* that event's
-   timestamp (carry-forward), which correctly handles repeat visits by the
-   same cat without needing an exact-timestamp match.
-
-Because this only ever reads already-settled history (never live state at
-the instant of a visit), there's no race condition to guard against — that
-was a real problem for the automation-based approach this replaced, where
-`last_used_by` could still be updating from a previous visit at the exact
-moment a new one was read live.
+   timestamp, plus a small tolerance window (carry-forward with lag
+   tolerance), which correctly handles both repeat visits by the same cat
+   and a real write-order quirk: for a single physical visit, the device
+   consistently writes `total_use` a few milliseconds — occasionally over a
+   second — *before* `last_used_by`, never at the exact same instant. A
+   strict "at or before" match would miss the visit's own identity write
+   every time and attribute it to the *previous* visit's cat instead. See
+   `CAT_ATTRIBUTION_TOLERANCE_MS` in `src/lib/history.js` for the real
+   captured data this was measured from.
 
 ## Supported devices
 

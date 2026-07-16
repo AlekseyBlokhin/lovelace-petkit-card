@@ -151,14 +151,48 @@ export function catChangeEvents(historyForEntity, knownNames) {
 }
 
 /**
+ * How far AFTER a duration event's own timestamp a cat-change event may
+ * still land and be treated as belonging to that same visit, rather than
+ * the next one.
+ *
+ * This exists because of a real, consistently-observed write-order lag on
+ * PetKit PURAMAX: for a single physical visit, the device/integration
+ * writes `total_use` (the duration signal) fractionally BEFORE
+ * `last_used_by`/`last_event` (the identity signal) -- never at the exact
+ * same instant, and never the other way around. Measured against three
+ * days of this device's real history (`lu` timestamps carry full
+ * sub-second precision over the WS API, they are NOT truncated to whole
+ * seconds): the gap for a matching same-visit pair was consistently a few
+ * milliseconds, with one outlier at ~1.1s. The smallest gap seen between
+ * two genuinely DIFFERENT visits was ~68s (litter box visits physically
+ * can't happen close together -- the shortest real visit duration observed
+ * was 27s, before any cooldown/cleaning cycle). 15s sits comfortably
+ * between those two numbers.
+ *
+ * A strict "cat-change event at or BEFORE this duration event" carry
+ * forward (no tolerance) misses the visit's own identity write every
+ * time, because that write's timestamp is always slightly later --
+ * shifting every attribution back by one visit. This was a real, reported
+ * bug (a cat's real last visit showing as the previous cat, and two
+ * same-cat visits in a row showing as two different cats) that went
+ * uncaught because the original test fixtures used exact-timestamp
+ * matches, which never occurs in real data. See `history.test.js` for the
+ * regression fixtures taken from live captured timestamps.
+ *
+ * @type {number}
+ */
+export const CAT_ATTRIBUTION_TOLERANCE_MS = 15000;
+
+/**
  * Attributes each duration event to a cat via carry-forward (last
  * observation carried forward): the cat in effect is whichever
  * `catChangeEvents` entry most recently occurred at or before that event's
- * timestamp. This is deliberately NOT an exact-timestamp match — when the
- * same cat visits twice in a row, most PetKit integrations don't emit a new
- * "last used by" state (the value didn't change), so there's no change
- * event to match against the second visit; the correct answer for it is
- * still "whoever the last known cat was."
+ * timestamp (plus `toleranceMs`, see `CAT_ATTRIBUTION_TOLERANCE_MS`). This
+ * is deliberately not an exact-timestamp match — when the same cat visits
+ * twice in a row, most PetKit integrations don't emit a new "last used by"
+ * state (the value didn't change), so there's no change event to match
+ * against the second visit; the correct answer for it is still "whoever
+ * the last known cat was."
  *
  * `catEvents` must already be sorted by `ts` ascending (as returned by
  * `catChangeEvents`). `durationEvents` is assumed sorted by `ts` ascending
@@ -166,16 +200,62 @@ export function catChangeEvents(historyForEntity, knownNames) {
  *
  * @param {Array<{ value: number, ts: number }>} durationEvents
  * @param {Array<{ cat: string, ts: number }>} catEvents
+ * @param {{ toleranceMs?: number }} [options]
  * @returns {Array<{ value: number, ts: number, cat: string|null }>}
  */
-export function attributeCats(durationEvents, catEvents) {
+export function attributeCats(durationEvents, catEvents, { toleranceMs = CAT_ATTRIBUTION_TOLERANCE_MS } = {}) {
   let idx = 0;
   let current = null;
   return durationEvents.map((event) => {
-    while (idx < catEvents.length && catEvents[idx].ts <= event.ts) {
+    while (idx < catEvents.length && catEvents[idx].ts <= event.ts + toleranceMs) {
       current = catEvents[idx].cat;
       idx++;
     }
     return { ...event, cat: current };
   });
+}
+
+/**
+ * How close a `last_event` "narration" point (e.g. a raw state of
+ * `"<cat> used the litter box"`) may be to an already-reconstructed
+ * `total_use`-derived visit for the same cat and still count as describing
+ * that same physical visit, for de-duplication purposes. Reuses
+ * `CAT_ATTRIBUTION_TOLERANCE_MS`'s reasoning/magnitude -- it's the same
+ * device writing both signals for the same event, so the same real-world
+ * write-order-lag bound applies.
+ *
+ * @type {number}
+ */
+export const VISIT_NARRATION_DEDUPE_TOLERANCE_MS = CAT_ATTRIBUTION_TOLERANCE_MS;
+
+/**
+ * Whether a `last_event` point narrating a specific cat's visit (raw state
+ * exactly `"<cat.name> used the litter box"`) duplicates a visit already
+ * present in `visits` (as returned by a card's `_fetchVisits`/similar) for
+ * that same cat, within `toleranceMs`.
+ *
+ * Two different device sensors (`total_use` and `last_event`) each
+ * independently report the same real visit -- `total_use`'s reconstruction
+ * is richer (it carries duration), so when both exist for the same visit,
+ * the `last_event` narration is the redundant one and should be dropped
+ * from a merged timeline rather than shown as a second row.
+ *
+ * @param {object} params
+ * @param {number} params.ts - the last_event point's timestamp (ms).
+ * @param {string} params.rawState - the last_event point's raw state string.
+ * @param {Array<{ cat: { name: string }, ts: number }>} params.visits
+ * @param {Array<{ name: string }>} params.cats
+ * @param {number} [params.toleranceMs]
+ * @returns {boolean}
+ */
+export function isDuplicateVisitNarration({
+  ts,
+  rawState,
+  visits,
+  cats,
+  toleranceMs = VISIT_NARRATION_DEDUPE_TOLERANCE_MS,
+}) {
+  const cat = cats.find((c) => rawState === `${c.name} used the litter box`);
+  if (!cat) return false;
+  return visits.some((v) => v.cat.name === cat.name && Math.abs(v.ts - ts) <= toleranceMs);
 }

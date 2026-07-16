@@ -503,6 +503,62 @@ describe('PetkitPuramaxCard: Working Records duplicate suppression (unavailable-
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
     expect(texts.filter((t) => t === 'Cat A Used The Litter Box').length).toBe(2);
   });
+
+  it('REGRESSION: does not show a visit twice as both "<cat> used the litter box" and "<cat> just spent Ns..." (issue #13)', async () => {
+    // total_use and last_event each independently report the SAME real
+    // visit -- total_use's reconstruction (with duration) is the richer
+    // one, so the last_event narration must be suppressed, not shown as a
+    // second row.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const visitTs = Math.floor(today9am.getTime() / 1000);
+    const totalUsePoints = [
+      { s: '0', lu: visitTs - 60 },
+      { s: '146', lu: visitTs }, // 2m26s visit
+    ];
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs + 2 }]; // 2s write-order lag
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A just spent 2m26s in the litter box');
+  });
+
+  it('keeps the last_event narration as a fallback when there is no matching total_use visit (e.g. total_use fetch failed)', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A Used The Litter Box');
+  });
 });
 
 describe('PetkitPuramaxCard: no-visit alert', () => {
@@ -690,8 +746,8 @@ describe('PetkitPuramaxCard: multi-cat visit reconstruction (total_use + last_us
         last_used_by: 'sensor.test_petkit_last_used_by',
       },
       cats: [
-        { name: 'Sky', color: '#111111' },
-        { name: 'Deya', color: '#222222' },
+        { name: 'Cat A', color: '#111111' },
+        { name: 'Cat B', color: '#222222' },
       ],
     });
     const card = makeCard();
@@ -699,13 +755,13 @@ describe('PetkitPuramaxCard: multi-cat visit reconstruction (total_use + last_us
 
     const totalUsePoints = [
       { s: '0', lu: t(0) },
-      { s: '50', lu: t(10) }, // Sky (exact last_used_by match)
-      { s: '80', lu: t(20) }, // Sky again -- no last_used_by change to match
-      { s: '100', lu: t(30) }, // Deya (exact last_used_by match)
+      { s: '50', lu: t(10) }, // Cat A (exact last_used_by match)
+      { s: '80', lu: t(20) }, // Cat A again -- no last_used_by change to match
+      { s: '100', lu: t(30) }, // Cat B (exact last_used_by match)
     ];
     const lastUsedByPoints = [
-      { s: 'Sky', lu: t(10) },
-      { s: 'Deya', lu: t(30) },
+      { s: 'Cat A', lu: t(10) },
+      { s: 'Cat B', lu: t(30) },
     ];
 
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
@@ -723,8 +779,8 @@ describe('PetkitPuramaxCard: multi-cat visit reconstruction (total_use + last_us
 
     const usageBody = card.shadowRoot.getElementById('usage-body');
     expect(usageBody.textContent).toContain('3 times');
-    expect(usageBody.textContent).toContain('Sky: 2');
-    expect(usageBody.textContent).toContain('Deya: 1');
+    expect(usageBody.textContent).toContain('Cat A: 2');
+    expect(usageBody.textContent).toContain('Cat B: 1');
 
     const stems = card.shadowRoot.querySelectorAll('.visit-point');
     expect(stems.length).toBe(3);

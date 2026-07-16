@@ -1,6 +1,12 @@
 import { formatDuration, formatHoursAgo, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats } from '../../lib/history.js';
+import {
+  buildHistoryRequest,
+  deltaEvents,
+  catChangeEvents,
+  attributeCats,
+  isDuplicateVisitNarration,
+} from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
@@ -635,6 +641,12 @@ export class PetkitPuramaxCard extends HTMLElement {
       const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
       if (!val || !ts) return;
       if (val in eventLabels && eventLabels[val] === null) return;
+      // last_event's own "<cat> used the litter box" narration and the
+      // total_use-derived stem above can both describe the exact same
+      // physical visit (two different sensors, one event) -- when the
+      // richer stem row (it has duration) already covers it, drop this
+      // one rather than showing the same visit twice.
+      if (isDuplicateVisitNarration({ ts, rawState: val, visits, cats: cfg.cats })) return;
       if (val === lastShownVal) return;
       lastShownVal = val;
       const label = eventLabels[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());

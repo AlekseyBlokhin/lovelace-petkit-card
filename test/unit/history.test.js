@@ -6,6 +6,8 @@ import {
   deltaEvents,
   catChangeEvents,
   attributeCats,
+  CAT_ATTRIBUTION_TOLERANCE_MS,
+  isDuplicateVisitNarration,
 } from '../../src/lib/history.js';
 
 describe('buildHistoryRequest', () => {
@@ -224,43 +226,43 @@ describe('catChangeEvents', () => {
   it('keeps only points whose state is a known cat name', () => {
     const hist = [
       { s: 'no_record_yet', lu: 1000 },
-      { s: 'Sky', lu: 2000 },
+      { s: 'Cat A', lu: 2000 },
       { s: 'unavailable', lu: 2500 },
-      { s: 'Deya', lu: 3000 },
+      { s: 'Cat B', lu: 3000 },
     ];
-    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([
-      { cat: 'Sky', ts: 2000000 },
-      { cat: 'Deya', ts: 3000000 },
+    expect(catChangeEvents(hist, ['Cat A', 'Cat B'])).toEqual([
+      { cat: 'Cat A', ts: 2000000 },
+      { cat: 'Cat B', ts: 3000000 },
     ]);
   });
 
   it('drops device placeholder states even if not explicitly named (anything not a known cat)', () => {
     const hist = [{ s: 'no_record_yet', lu: 1000 }];
-    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([]);
+    expect(catChangeEvents(hist, ['Cat A', 'Cat B'])).toEqual([]);
   });
 
   it('sorts output by timestamp', () => {
     const hist = [
-      { s: 'Deya', lu: 3000 },
-      { s: 'Sky', lu: 1000 },
+      { s: 'Cat B', lu: 3000 },
+      { s: 'Cat A', lu: 1000 },
     ];
-    expect(catChangeEvents(hist, ['Sky', 'Deya'])).toEqual([
-      { cat: 'Sky', ts: 1000000 },
-      { cat: 'Deya', ts: 3000000 },
+    expect(catChangeEvents(hist, ['Cat A', 'Cat B'])).toEqual([
+      { cat: 'Cat A', ts: 1000000 },
+      { cat: 'Cat B', ts: 3000000 },
     ]);
   });
 
   it('returns an empty array for missing/non-array input', () => {
-    expect(catChangeEvents(undefined, ['Sky'])).toEqual([]);
-    expect(catChangeEvents(null, ['Sky'])).toEqual([]);
+    expect(catChangeEvents(undefined, ['Cat A'])).toEqual([]);
+    expect(catChangeEvents(null, ['Cat A'])).toEqual([]);
   });
 });
 
 describe('attributeCats', () => {
   it('attributes an event to the most recent cat-change event at or before its timestamp', () => {
     const durationEvents = [{ value: 50, ts: 2000 }];
-    const catEvents = [{ cat: 'Sky', ts: 1000 }];
-    expect(attributeCats(durationEvents, catEvents)).toEqual([{ value: 50, ts: 2000, cat: 'Sky' }]);
+    const catEvents = [{ cat: 'Cat A', ts: 1000 }];
+    expect(attributeCats(durationEvents, catEvents)).toEqual([{ value: 50, ts: 2000, cat: 'Cat A' }]);
   });
 
   it('carries the cat forward across events with NO matching change event (same cat visits twice in a row)', () => {
@@ -274,59 +276,233 @@ describe('attributeCats', () => {
       { value: 59, ts: 2000 },
       { value: 27, ts: 2100 },
     ];
-    const catEvents = [{ cat: 'Sky', ts: 900 }];
+    const catEvents = [{ cat: 'Cat A', ts: 900 }];
     expect(attributeCats(durationEvents, catEvents)).toEqual([
-      { value: 46, ts: 1000, cat: 'Sky' },
-      { value: 59, ts: 2000, cat: 'Sky' },
-      { value: 27, ts: 2100, cat: 'Sky' },
+      { value: 46, ts: 1000, cat: 'Cat A' },
+      { value: 59, ts: 2000, cat: 'Cat A' },
+      { value: 27, ts: 2100, cat: 'Cat A' },
     ]);
   });
 
-  it('attributes events with no preceding cat-change event to null (unknown -- nothing to carry forward)', () => {
+  it('attributes events with no preceding or near-following cat-change event to null (unknown -- nothing to carry forward)', () => {
+    // The cat-change event here is well past CAT_ATTRIBUTION_TOLERANCE_MS
+    // after the duration event, so it can't be this event's own (lagged)
+    // identity write either -- it must belong to some later, different
+    // visit, not this one.
     const durationEvents = [{ value: 50, ts: 500 }];
-    const catEvents = [{ cat: 'Sky', ts: 1000 }];
+    const catEvents = [{ cat: 'Cat A', ts: 500 + CAT_ATTRIBUTION_TOLERANCE_MS + 1000 }];
     expect(attributeCats(durationEvents, catEvents)).toEqual([{ value: 50, ts: 500, cat: null }]);
   });
 
   it('switches attribution forward as soon as a later cat-change event is reached', () => {
+    // Timestamps use realistic real-world spacing (tens of seconds+, not
+    // the sub-second gaps a naive synthetic fixture might use) -- with
+    // CAT_ATTRIBUTION_TOLERANCE_MS in play, two events closer together
+    // than the tolerance window are no longer a meaningful test of
+    // "switches forward", since the later cat-change event would
+    // legitimately be pulled into the earlier visit too. See the
+    // write-order-lag regression block below for why that tolerance
+    // exists.
     const durationEvents = [
       { value: 10, ts: 1000 },
-      { value: 20, ts: 3000 },
+      { value: 20, ts: 30000 },
     ];
     const catEvents = [
-      { cat: 'Sky', ts: 500 },
-      { cat: 'Deya', ts: 2000 },
+      { cat: 'Cat A', ts: 500 },
+      { cat: 'Cat B', ts: 20000 },
     ];
     expect(attributeCats(durationEvents, catEvents)).toEqual([
-      { value: 10, ts: 1000, cat: 'Sky' },
-      { value: 20, ts: 3000, cat: 'Deya' },
+      { value: 10, ts: 1000, cat: 'Cat A' },
+      { value: 20, ts: 30000, cat: 'Cat B' },
     ]);
   });
 
   it('REGRESSION: reproduces a real captured sequence (mixed exact-match and carry-forward visits)', () => {
-    // Taken from a live PetKit PURAMAX's total_use/last_used_by history over
-    // one day: some visits land an exact-timestamp cat-change event, others
-    // (same cat repeating) don't and must carry forward.
+    // Shape taken from a live PetKit PURAMAX's total_use/last_used_by
+    // history over one day: some visits land a cat-change event a few ms
+    // after them (as always -- see the write-order-lag block below),
+    // others (same cat repeating) don't and must carry forward. Spacing
+    // between different-cat visits is realistic (60-120s, matching real
+    // observed gaps), not compressed to sub-second synthetic values.
     const durationEvents = [
-      { value: 119, ts: 1000 }, // Sky (exact)
-      { value: 133, ts: 2000 }, // Sky (carry-forward, no change event)
-      { value: 34, ts: 3000 }, // Deya (exact)
-      { value: 46, ts: 4000 }, // Sky (exact)
-      { value: 59, ts: 5000 }, // Sky (carry-forward)
-      { value: 27, ts: 5100 }, // Sky (carry-forward, 100ms later)
+      { value: 119, ts: 60000 }, // Cat A (own event lands 5ms later)
+      { value: 133, ts: 180000 }, // Cat A (carry-forward, no change event)
+      { value: 34, ts: 300000 }, // Cat B (own event lands 8ms later)
+      { value: 46, ts: 420000 }, // Cat A (own event lands 10ms later)
+      { value: 59, ts: 480000 }, // Cat A (carry-forward)
+      { value: 27, ts: 540000 }, // Cat A (carry-forward)
     ];
     const catEvents = [
-      { cat: 'Sky', ts: 1000 },
-      { cat: 'Deya', ts: 3000 },
-      { cat: 'Sky', ts: 4000 },
+      { cat: 'Cat A', ts: 60005 },
+      { cat: 'Cat B', ts: 300008 },
+      { cat: 'Cat A', ts: 420010 },
     ];
     expect(attributeCats(durationEvents, catEvents).map((e) => e.cat)).toEqual([
-      'Sky',
-      'Sky',
-      'Deya',
-      'Sky',
-      'Sky',
-      'Sky',
+      'Cat A',
+      'Cat A',
+      'Cat B',
+      'Cat A',
+      'Cat A',
+      'Cat A',
     ]);
+  });
+
+  // --------------------------------------------------------------------
+  // REGRESSION: the "one visit behind" attribution bug (reported live,
+  // 2026-07-15). Root cause, confirmed against this device's real history
+  // pulled directly over the WS API (`lu` carries full sub-second
+  // precision, it is NOT truncated to whole seconds as earlier assumed):
+  // for a single physical visit, `total_use` (the duration signal) is
+  // ALWAYS written a few milliseconds -- occasionally over a second --
+  // BEFORE `last_used_by`/`last_event` (the identity signal), never at
+  // the exact same instant. The tests above only ever used an EXACT
+  // timestamp match or a change event strictly earlier, which never
+  // happens in real data -- that's why this shipped uncaught. Real
+  // captured pairs (epoch seconds, full precision, from this device --
+  // cat names replaced with Cat A/Cat B):
+  //   duration 1783906193.202 / cat-event Cat B@1783906193.210 (+0.008s)
+  //   duration 1783907233.978 / cat-event Cat A@1783907235.097 (+1.119s)
+  //   duration 1784145166.203 / cat-event Cat A@1784145166.203 (+0.001s)
+  // The largest real same-visit gap seen was ~1.1s; the smallest real gap
+  // between two genuinely different visits was ~68s (a full litter box
+  // visit takes tens of seconds minimum). CAT_ATTRIBUTION_TOLERANCE_MS
+  // (15s) sits between those two numbers.
+  // --------------------------------------------------------------------
+  describe('REGRESSION: attribution write-order lag (identity write lands after the duration write)', () => {
+    it('attributes a visit correctly even when its own cat-change event lands 8ms after it', () => {
+      const durationEvents = [{ value: 32, ts: 1783906193202 }];
+      const catEvents = [{ cat: 'Cat B', ts: 1783906193210 }];
+      expect(attributeCats(durationEvents, catEvents)[0].cat).toBe('Cat B');
+    });
+
+    it('attributes a visit correctly even when its own cat-change event lands 1.1s after it (largest observed real gap)', () => {
+      const durationEvents = [{ value: 50, ts: 1783907233978 }];
+      const catEvents = [{ cat: 'Cat A', ts: 1783907235097 }];
+      expect(attributeCats(durationEvents, catEvents)[0].cat).toBe('Cat A');
+    });
+
+    it('does NOT attribute a visit to a cat-change event that is only 1ms after it as the PREVIOUS cat (the actual reported bug)', () => {
+      // Before the fix: strict `catEvents[idx].ts <= event.ts` excludes a
+      // cat-change event that lands even 1ms late, so the visit inherits
+      // whatever cat was current *before* it -- here, a stale "Cat B" from
+      // hours earlier -- even though the real-time signal for THIS visit
+      // (Cat A) is sitting right there, 1ms later.
+      const durationEvents = [{ value: 121, ts: 1784145166203 }];
+      const catEvents = [
+        { cat: 'Cat B', ts: 1783906193210 }, // stale, hours earlier
+        { cat: 'Cat A', ts: 1784145166203 },
+      ];
+      expect(attributeCats(durationEvents, catEvents)[0].cat).toBe('Cat A');
+    });
+
+    it('REGRESSION: reproduces the exact reported symptom -- two consecutive same-cat visits misattributed as two different cats', () => {
+      // User report: two visits close to each other were actually both by
+      // the same cat, but got shown as two different cats. Mechanism: the
+      // first of the two real same-cat visits has a same-visit cat-change
+      // event lagging a few ms behind it (as always); without tolerance,
+      // that write gets missed and the visit inherits the stale prior cat
+      // (from long before). The device doesn't re-emit last_used_by for
+      // the second visit (same cat as last time), so it just carries
+      // forward -- but by then `current` has already been correctly
+      // updated by the (late) cat-change event, since that event happens
+      // to land before the second visit. Net old-algorithm result:
+      // Cat B, Cat A. Correct result: Cat A, Cat A.
+      const durationEvents = [
+        { value: 46, ts: 1000000 }, // visit A: really Cat A
+        { value: 59, ts: 1030000 }, // visit B: really Cat A, 30s later, no new identity write
+      ];
+      const catEvents = [
+        { cat: 'Cat B', ts: 500000 }, // stale, from a much earlier visit
+        { cat: 'Cat A', ts: 1000005 }, // A's own identity write, 5ms late
+      ];
+      expect(attributeCats(durationEvents, catEvents).map((e) => e.cat)).toEqual(['Cat A', 'Cat A']);
+    });
+
+    it('does not pull a cat-change event more than 15s past a visit forward into that visit\'s attribution', () => {
+      // A cat-change event 20s after a visit is outside the tolerance
+      // window -- it must NOT be treated as that visit's own identity
+      // write. The visit instead carries forward whatever cat was already
+      // current (here, none yet -- so null), and the later event is left
+      // for whichever visit it actually belongs to.
+      const durationEvents = [{ value: 56, ts: 1000000 }];
+      const catEvents = [{ cat: 'Cat A', ts: 1020000 }]; // 20s after, past the 15s window
+      expect(attributeCats(durationEvents, catEvents)[0].cat).toBeNull();
+    });
+
+    it('a cat-change event just outside the tolerance window is correctly picked up by the NEXT visit instead', () => {
+      const durationEvents = [
+        { value: 56, ts: 1000000 }, // too early to claim the cat-change event below
+        { value: 84, ts: 1019000 }, // 19s later -- the event (at 1020000) is within 15s of THIS visit
+      ];
+      const catEvents = [{ cat: 'Cat A', ts: 1020000 }];
+      const result = attributeCats(durationEvents, catEvents);
+      expect(result[0].cat).toBeNull();
+      expect(result[1].cat).toBe('Cat A');
+    });
+
+    it('exposes the tolerance as a named, overridable constant', () => {
+      expect(CAT_ATTRIBUTION_TOLERANCE_MS).toBe(15000);
+      const durationEvents = [{ value: 50, ts: 1000 }];
+      const catEvents = [{ cat: 'Cat A', ts: 1000 + CAT_ATTRIBUTION_TOLERANCE_MS + 1 }];
+      // Just past the default tolerance -> not this visit's.
+      expect(attributeCats(durationEvents, catEvents)[0].cat).toBeNull();
+      // A custom, smaller tolerance can be passed explicitly.
+      const catEvents2 = [{ cat: 'Cat A', ts: 1005 }];
+      expect(attributeCats(durationEvents, catEvents2, { toleranceMs: 2 })[0].cat).toBeNull();
+      expect(attributeCats(durationEvents, catEvents2, { toleranceMs: 10 })[0].cat).toBe('Cat A');
+    });
+  });
+});
+
+describe('isDuplicateVisitNarration', () => {
+  const cats = [{ name: 'Cat A' }, { name: 'Cat B' }];
+
+  it('flags a last_event narration as duplicate when a matching total_use visit exists within tolerance', () => {
+    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
+    expect(
+      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat A used the litter box', visits, cats }),
+    ).toBe(true);
+  });
+
+  it('still flags it when the narration lands a few ms after the visit (the real write-order lag)', () => {
+    const visits = [{ cat: { name: 'Cat A' }, ts: 1783999568254, duration: 84 }];
+    expect(
+      isDuplicateVisitNarration({
+        ts: 1783999568254 + 4, // 4ms later, matching real observed lag magnitude
+        rawState: 'Cat A used the litter box',
+        visits,
+        cats,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not flag a raw state that is not a recognized "<cat> used the litter box" narration', () => {
+    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
+    expect(isDuplicateVisitNarration({ ts: 100000, rawState: 'maintenance_mode', visits, cats })).toBe(false);
+  });
+
+  it('does not flag a narration for a DIFFERENT cat than the nearby visit', () => {
+    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
+    expect(
+      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat B used the litter box', visits, cats }),
+    ).toBe(false);
+  });
+
+  it('does not flag a same-cat narration far outside the tolerance window (a genuinely separate mention)', () => {
+    const visits = [{ cat: { name: 'Cat A' }, ts: 100000, duration: 146 }];
+    expect(
+      isDuplicateVisitNarration({
+        ts: 100000 + 60000,
+        rawState: 'Cat A used the litter box',
+        visits,
+        cats,
+      }),
+    ).toBe(false);
+  });
+
+  it('returns false when there are no visits at all (e.g. total_use fetch failed) -- narration is kept as fallback', () => {
+    expect(
+      isDuplicateVisitNarration({ ts: 100000, rawState: 'Cat A used the litter box', visits: [], cats }),
+    ).toBe(false);
   });
 });
