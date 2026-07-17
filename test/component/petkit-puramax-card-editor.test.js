@@ -105,6 +105,15 @@ describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
       notify_service: 'notify.mobile_app_x',
     });
   });
+
+  it('includes unknown_cat_color in the flattened main form data and round-trips it back into config on change', () => {
+    const withColor = makeEditor();
+    withColor.setConfig(baseConfig({ unknown_cat_color: '#ff00ff' }));
+    expect(mainForm(withColor).data).toMatchObject({ unknown_cat_color: '#ff00ff' });
+
+    fireValueChanged(mainForm(withColor), { ...withColor._flattenMain(), unknown_cat_color: '#00ff00' });
+    expect(withColor._config.unknown_cat_color).toBe('#00ff00');
+  });
 });
 
 describe('PetkitPuramaxCardEditor: native HA chrome', () => {
@@ -152,6 +161,12 @@ describe('PetkitPuramaxCardEditor: native HA chrome', () => {
     const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
     const notifyField = alertsGroup.schema.find((s) => s.name === 'notify_service');
     expect(notifyField.selector).toEqual({ entity: { domain: 'notify' } });
+  });
+
+  it('exposes unknown_cat_color as a native color selector, not a plain text field', () => {
+    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
+    const colorField = alertsGroup.schema.find((s) => s.name === 'unknown_cat_color');
+    expect(colorField.selector).toEqual({ ui_color: {} });
   });
 
   it('exposes no_visit_alert_hours as a bounded number field', () => {

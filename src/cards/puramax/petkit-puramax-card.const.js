@@ -1,52 +1,53 @@
 /**
- * Default labels for `device_entities.last_event` state values, as reported
- * by PETKIT PURAMAX firmware. This is PURAMAX-specific vocabulary — an
- * architecture audit found it hardcoded inline in the card's DOM-rendering
- * code, which meant a different PETKIT device (or a future firmware
- * version with new event names) couldn't be supported without editing the
- * card. It's now a config-overridable default: an optional `event_labels`
- * config object is shallow-merged over this map (config wins).
+ * Optional display-relabeling for `device_entities.last_event` state
+ * values, as reported by PETKIT PURAMAX firmware. Purely cosmetic renaming
+ * of a KNOWN exact raw value to nicer text (`auto_cleaning_completed` ->
+ * "Auto cleaning done") -- never used to hide, exclude, or otherwise decide
+ * WHETHER a row is shown (see `DEFAULT_EVENT_EXCLUDE` for that). An
+ * optional `event_labels` config object is shallow-merged over this map
+ * (config wins); any raw value with no entry here (including every visit
+ * narration, e.g. "Whiskers used the litter box") is shown completely
+ * verbatim, exactly as PETKIT reported it -- Working Records never runs raw
+ * state text through any pattern/regex to detect, reinterpret, or reformat
+ * it.
  *
- * A value of `null` means "don't show a Working Records row for this event"
- * (used for the device's own "nothing has happened yet" placeholder state,
- * and for the generic HA special-states `unavailable`/`unknown`, which can
- * show up on any entity, e.g. during a restart or a brief connectivity
- * blip, and are noise rather than a real device event). A user can hide any
- * other noisy state the same way via their own `event_labels` config.
- *
- * @type {Record<string, string|null>}
+ * @type {Record<string, string>}
  */
 export const DEFAULT_EVENT_LABELS = {
   maintenance_mode: 'Maintenance mode',
   manual_odor_completed: 'Manual odor removal done',
   auto_cleaning_completed: 'Auto cleaning done',
-  no_events_yet: null,
-  unavailable: null,
-  unknown: null,
 };
 
 /**
- * Matches `last_event` raw states that narrate a visit (e.g. "Whiskers used
- * the litter box", "Unknown used the litter box") -- PURAMAX firmware's own
- * vocabulary for "someone just used the box," as opposed to a genuinely
- * distinct device-status event (maintenance, cleaning, odor removal,
- * errors).
+ * Default `event_exclude` list: raw `last_event` state values hidden from
+ * Working Records entirely, matched case-insensitively against the exact
+ * raw state value (a plain equality check, never a substring/pattern match
+ * -- so this can never accidentally hide a real "Unknown used the litter
+ * box" visit narration, whose raw state is a completely different string
+ * from the bare `unknown` special-state this targets). Covers the two
+ * generic HA special-states (`unavailable`/`unknown`, which can show up on
+ * ANY entity during a restart or connectivity blip) plus PURAMAX's own
+ * "nothing has happened yet" placeholder. User-overridable via the
+ * `event_exclude` config array (replaces this default, not merged with it
+ * -- pass your own full list if you want to keep these plus more).
  *
- * Working Records has exactly one source of truth for "a real visit
- * happened": the `total_use`/`last_used_by` reconstruction (it's richer --
- * it carries duration, and every real visit produces a `total_use` delta
- * whether or not the cat could be identified). A `last_event` narration is
- * always redundant with that reconstruction, so it's unconditionally
- * excluded from Working Records here rather than conditionally
- * de-duplicated against nearby visits -- the two-sources-merged design that
- * preceded this needed dedupe logic to reconcile the same event reported
- * twice, which was fragile (see the git history of this file/card for the
- * bugs that came from it). `event_labels` remains the mechanism for hiding
- * any *other* noisy state.
- *
- * @type {RegExp}
+ * @type {string[]}
  */
-export const VISIT_NARRATION_PATTERN = / used the litter box$/;
+export const DEFAULT_EVENT_EXCLUDE = ['unavailable', 'unknown', 'no_events_yet'];
+
+/**
+ * Fallback color for a chart/analytics visit whose `last_used_by` value was
+ * `UNKNOWN_CAT_STATE` (see `src/lib/history.js`) -- the device's own "I
+ * couldn't identify this cat" assertion. A neutral gray, matching how the
+ * PetKit app itself displays an unidentified visit -- override via the
+ * `unknown_cat_color` config key if it doesn't match your app's exact
+ * shade. Unrelated to Working Records, which never inspects `last_event`
+ * text closely enough to know which cat (if any) a row is about.
+ *
+ * @type {string}
+ */
+export const DEFAULT_UNKNOWN_CAT_COLOR = '#9e9e9e';
 
 /** Default card title shown when config doesn't set one. */
 export const DEFAULT_TITLE = 'PETKIT PURAMAX';

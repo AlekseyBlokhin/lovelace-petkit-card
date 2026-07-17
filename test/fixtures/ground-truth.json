@@ -1,0 +1,702 @@
+{
+  "2026-07-14": {
+    "visits": [
+      {
+        "ts": 1783980136.20888,
+        "duration": 38.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1783997062.278822,
+        "duration": 30.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1783999406.623009,
+        "duration": 56.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1783999568.253738,
+        "duration": 84.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784003020.292805,
+        "duration": 119.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784015498.268939,
+        "duration": 28.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784019222.274618,
+        "duration": 53.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784019513.26482,
+        "duration": 104.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784021006.307727,
+        "duration": 38.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784021307.319896,
+        "duration": 37.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784022628.29475,
+        "duration": 49.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784022928.255967,
+        "duration": 93.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784050578.194813,
+        "duration": 45.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784056444.227855,
+        "duration": 27.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784065948.201892,
+        "duration": 42.0,
+        "cat": "Cat A"
+      }
+    ],
+    "aggregate": {
+      "total_count": 15,
+      "total_duration": 843.0,
+      "per_cat_count": {
+        "Cat A": 10,
+        "Cat B": 5
+      },
+      "per_cat_duration": {
+        "Cat A": 618.0,
+        "Cat B": 225.0
+      },
+      "unknown_count": 0,
+      "unknown_duration": 0.0
+    },
+    "working_records": [
+      {
+        "ts": 1784065948.20926,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784064074.135547,
+        "text": "manual_cleaning_completed"
+      },
+      {
+        "ts": 1784063864.143932,
+        "text": "manual_cleaning_canceled"
+      },
+      {
+        "ts": 1784061522.270801,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784056444.2343,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784050578.202357,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784050278.217472,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784023000.206403,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784021006.311188,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784019645.278242,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784019591.191505,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784019513.268443,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784019353.190003,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784019290.086281,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784019222.278704,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784015498.273081,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784015378.349192,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784011530.343577,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784010870.313114,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784006318.25684,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784005386.283838,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784003161.21725,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784003108.18053,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784003020.296502,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784002120.274891,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784000621.262671,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784000019.30118,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1783999709.202294,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1783999646.170582,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1783999635.944061,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1783999285.488651,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1783997062.285805,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1783994166.267851,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1783992663.266224,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1783992300.255608,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1783991879.31576,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1783980136.215256,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1783980000.0,
+        "text": "Cat B used the litter box"
+      }
+    ]
+  },
+  "2026-07-15": {
+    "visits": [
+      {
+        "ts": 1784069681.197754,
+        "duration": 119.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784079631.238241,
+        "duration": 133.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784083344.209293,
+        "duration": 34.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784084761.249472,
+        "duration": 46.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784085091.235948,
+        "duration": 59.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784085102.391032,
+        "duration": 27.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784099294.2013,
+        "duration": 29.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784102085.222786,
+        "duration": 37.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784105931.231302,
+        "duration": 119.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784110286.246797,
+        "duration": 146.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784125942.228812,
+        "duration": 44.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784135989.22712,
+        "duration": 33.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784137761.236799,
+        "duration": 180.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784145166.202572,
+        "duration": 121.0,
+        "cat": "Cat A"
+      }
+    ],
+    "aggregate": {
+      "total_count": 14,
+      "total_duration": 1127.0,
+      "per_cat_count": {
+        "Cat A": 10,
+        "Cat B": 4
+      },
+      "per_cat_duration": {
+        "Cat A": 851.0,
+        "Cat B": 276.0
+      },
+      "unknown_count": 0,
+      "unknown_duration": 0.0
+    },
+    "working_records": [
+      {
+        "ts": 1784145297.168193,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784145166.203645,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784137892.120144,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784137839.407336,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784137131.274394,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784135989.234264,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784125942.232463,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784110417.176396,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784110328.251729,
+        "text": "manual_odor_failed_batt"
+      },
+      {
+        "ts": 1784110286.252877,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784106072.145676,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784105998.84365,
+        "text": "manual_odor_failed_batt"
+      },
+      {
+        "ts": 1784102085.230374,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784099294.208481,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784091797.247159,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784086404.23723,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784085222.160016,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784084761.253569,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784083344.216453,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784079762.148136,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784079698.743902,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784079631.245028,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784075117.262399,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784069822.164339,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784069748.826679,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784069681.204505,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784069350.29916,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784068389.238385,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784066759.21277,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784066400.0,
+        "text": "Cat A used the litter box"
+      }
+    ]
+  },
+  "2026-07-16": {
+    "visits": [
+      {
+        "ts": 1784169314.230191,
+        "duration": 32.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784171571.291657,
+        "duration": 48.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784171902.252968,
+        "duration": 153.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784175322.273549,
+        "duration": 17.0,
+        "cat": "Unknown"
+      },
+      {
+        "ts": 1784175562.391356,
+        "duration": 43.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784190430.230248,
+        "duration": 41.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784190760.256803,
+        "duration": 28.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784193738.244442,
+        "duration": 174.0,
+        "cat": "Cat B"
+      },
+      {
+        "ts": 1784197023.185345,
+        "duration": 128.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784198545.225513,
+        "duration": 37.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784198665.206183,
+        "duration": 47.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784198935.256151,
+        "duration": 32.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784199055.201804,
+        "duration": 44.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784201224.428511,
+        "duration": 59.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784201545.95706,
+        "duration": 29.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784203532.222955,
+        "duration": 18.0,
+        "cat": "Unknown"
+      },
+      {
+        "ts": 1784219570.252269,
+        "duration": 115.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784231778.268198,
+        "duration": 40.0,
+        "cat": "Cat A"
+      },
+      {
+        "ts": 1784233701.216634,
+        "duration": 33.0,
+        "cat": "Cat B"
+      }
+    ],
+    "aggregate": {
+      "total_count": 19,
+      "total_duration": 1118.0,
+      "per_cat_count": {
+        "Cat B": 4,
+        "Cat A": 13
+      },
+      "per_cat_duration": {
+        "Cat B": 267.0,
+        "Cat A": 816.0
+      },
+      "unknown_count": 2,
+      "unknown_duration": 35.0
+    },
+    "working_records": [
+      {
+        "ts": 1784237482.23109,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784234932.241814,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784233701.217584,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784231778.268551,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784219701.205715,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784219637.892375,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784219570.252967,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784217730.138804,
+        "text": "Unknown used the litter box"
+      },
+      {
+        "ts": 1784203532.223673,
+        "text": "Unknown used the litter box"
+      },
+      {
+        "ts": 1784201545.95759,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784201355.160081,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784201292.059792,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784198545.225998,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784197154.112492,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784197090.757306,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784197023.186171,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784193869.167905,
+        "text": "Maintenance mode"
+      },
+      {
+        "ts": 1784193805.858666,
+        "text": "Manual odor removal done"
+      },
+      {
+        "ts": 1784190760.257473,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784190430.230762,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784189349.222284,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784182411.240085,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784178192.228584,
+        "text": "Auto cleaning done"
+      },
+      {
+        "ts": 1784175562.391917,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784175322.274387,
+        "text": "Unknown used the litter box"
+      },
+      {
+        "ts": 1784174932.24307,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784174521.41928,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784172862.243485,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784171902.253726,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784171571.292725,
+        "text": "Cat A used the litter box"
+      },
+      {
+        "ts": 1784169314.231092,
+        "text": "Cat B used the litter box"
+      },
+      {
+        "ts": 1784152800.0,
+        "text": "Maintenance mode"
+      }
+    ]
+  }
+}

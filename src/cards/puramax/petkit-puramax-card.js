@@ -1,6 +1,6 @@
 import { formatDuration, formatHoursAgo, escapeHtml } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats } from '../../lib/history.js';
+import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
@@ -9,10 +9,11 @@ import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
   DEFAULT_EVENT_LABELS,
+  DEFAULT_EVENT_EXCLUDE,
+  DEFAULT_UNKNOWN_CAT_COLOR,
   DEFAULT_DECLINE_THRESHOLD_PCT,
   DEFAULT_NO_VISIT_ALERT_HOURS,
   MAX_VALID_VISIT_SECONDS,
-  VISIT_NARRATION_PATTERN,
   CHART_WIDTH,
   CHART_HEIGHT,
   CHART_PADDING,
@@ -21,13 +22,18 @@ import {
 /**
  * PETKIT PURAMAX litter box card: device status, controls, a day-switchable
  * per-cat visit chart, a Working Records timeline, and today/3d-avg/7d-avg
- * analytics with a decline/spike warning. All per-cat analytics are derived
- * client-side from the device's own `total_use` (a running counter that
- * bumps by one visit's duration on every use) and, when there's more than
- * one cat, `last_used_by` (which cat used it most recently) sensors — no
- * accumulator/statistics/per-cat helper entities needed. See
- * `_reconstructVisits()` for how a duration+identity per visit is derived
- * from those two generic sensors.
+ * analytics with a decline/spike warning. Two independent data sources feed
+ * two independent parts of the UI:
+ *  - The chart, Usage line, and Analytics are derived client-side from the
+ *    device's own `total_use` (a running counter that bumps by one visit's
+ *    duration on every use) and, when there's more than one cat,
+ *    `last_used_by` (which cat used it most recently) sensors — no
+ *    accumulator/statistics/per-cat helper entities needed. See
+ *    `_fetchVisits()` for how a duration+identity per visit is derived from
+ *    those two generic sensors.
+ *  - Working Records is `device_entities.last_event`'s own history, shown
+ *    verbatim — see `_renderChartArea()`'s Working Records section for why
+ *    it's deliberately NOT cross-referenced with the reconstruction above.
  *
  * DOM/lifecycle only — all math lives in `src/lib/*`.
  */
@@ -179,17 +185,13 @@ export class PetkitPuramaxCard extends HTMLElement {
   //    deltas ARE the per-visit durations.
   //  - device_entities.last_used_by: which cat used it most recently. Only
   //    fetched/needed when there's more than one cat -- with a single cat
-  //    every visit is trivially theirs. Attribution is carry-forward (see
-  //    `attributeCats`), not an exact-timestamp match, since most PetKit
-  //    integrations don't emit a new last_used_by state when the same cat
-  //    visits twice in a row.
-  //
-  // Unlike the automation this replaces, there's no race condition from
-  // reading LIVE state mid-write here (history is only ever read after the
-  // fact) -- but there IS a real, consistently observed write-ORDER lag
-  // (`last_used_by`'s write for a visit lands a few ms after `total_use`'s,
-  // never before), which `attributeCats`'s tolerance window accounts for.
-  // See CAT_ATTRIBUTION_TOLERANCE_MS in history.js for the measured data.
+  //    every visit is trivially theirs. Attribution is nearest-neighbor
+  //    matching (see `attributeCats`), not an exact-timestamp match, since
+  //    most PetKit integrations don't emit a new last_used_by state when
+  //    the same cat visits twice in a row, and its write for a given visit
+  //    can lag total_use's by anywhere from milliseconds to (rarely)
+  //    minutes -- see `attributeCats` in history.js for the measured data
+  //    and why a fixed tolerance window can't safely cover both.
   async _fetchVisits({ start, end }) {
     const cfg = this._config;
     const totalUseReq = buildHistoryRequest({
@@ -240,13 +242,29 @@ export class PetkitPuramaxCard extends HTMLElement {
 
     const catsByName = new Map(cfg.cats.map((c) => [c.name, c]));
     // A duration event with no resolvable cat (e.g. the very first visit
-    // ever, before any last_used_by value has been recorded, or the device
-    // itself failed to identify the cat) still represents a real visit --
-    // this is the single source of truth for "did a visit happen," so it's
-    // kept (with `cat: null`) rather than silently dropped. Callers that
-    // only care about per-*named*-cat data (the chart stems, usage counts,
-    // analytics) filter these out themselves; Working Records shows them.
-    return attributed.map((e) => ({ cat: catsByName.get(e.cat) || null, duration: e.value, ts: e.ts }));
+    // ever, before any last_used_by value has been recorded) still
+    // represents a real visit -- kept (with `cat: null`) rather than
+    // silently dropped, so callers that need "did a visit happen at all"
+    // (e.g. total daily counts) don't undercount. `UNKNOWN_CAT_LABEL`
+    // (PURAMAX's own "the device couldn't identify this cat" assertion,
+    // as opposed to no assertion at all) maps to a fixed pseudo-cat object
+    // instead, so it gets consistent gray styling and a usage-line entry --
+    // see `_unknownCat()`.
+    return attributed.map((e) => ({
+      cat: e.cat === UNKNOWN_CAT_LABEL ? this._unknownCat() : catsByName.get(e.cat) || null,
+      duration: e.value,
+      ts: e.ts,
+    }));
+  }
+
+  // Fixed pseudo-cat object for a visit the device itself couldn't
+  // identify (`UNKNOWN_CAT_STATE`/`UNKNOWN_CAT_LABEL` -- see history.js).
+  // Deliberately NOT one of `cfg.cats`, so it's naturally excluded from
+  // per-named-cat Analytics (which iterates `cfg.cats`) while still
+  // participating in the chart (gray stem) and the usage-line legend on
+  // days it occurs -- see `_renderChartArea`.
+  _unknownCat() {
+    return { name: UNKNOWN_CAT_LABEL, color: this._config.unknown_cat_color || DEFAULT_UNKNOWN_CAT_COLOR };
   }
 
   // ---------- data loading ----------
@@ -506,13 +524,14 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (this._loadingChart) return;
 
     const cfg = this._config;
-    // `allVisits` is the single source of truth for "a real visit
-    // happened" (used by Working Records below, including visits that
-    // couldn't be attributed to a configured cat); `visits` is the subset
-    // attributable to a named cat, which is all the chart/usage-count/
-    // tooltip code below cares about.
-    const allVisits = (this._chartVisits || []).slice().sort((a, b) => a.ts - b.ts);
-    const visits = allVisits.filter((v) => v.cat);
+    // The total_use/last_used_by reconstruction drives the chart, the Usage
+    // line, and Analytics -- `visits` here is every visit with a resolved
+    // identity (a configured cat, or the Unknown pseudo-cat), which is all
+    // of them except a visit from before any identity was ever recorded
+    // (cat: null, vanishingly rare -- the very first visit ever). Working
+    // Records is intentionally NOT built from this data at all; see its own
+    // comment below for why.
+    const visits = (this._chartVisits || []).filter((v) => v.cat).sort((a, b) => a.ts - b.ts);
 
     // Chart: 0-24h stem plot
     const width = CHART_WIDTH;
@@ -599,23 +618,39 @@ export class PetkitPuramaxCard extends HTMLElement {
       });
     });
 
-    // Usage section: driven by the SAME data as the chart, so it always
-    // matches the day currently shown (not a separate live device sensor).
+    // Usage section: driven by the SAME data as the chart (`visits`, above),
+    // so it always matches the day currently shown (not a separate live
+    // device sensor). `visits` already includes Unknown (it has a real
+    // `.color`/`.name`, just not one of `cfg.cats`, so it also plots as a
+    // gray stem on the chart above) -- but the usage-line "legend" row is
+    // built only from `cfg.cats` PLUS an Unknown entry that's added only
+    // when this day actually had one (never a permanent zero-count slot).
     if (usageBody) {
       const perCat = {};
       cfg.cats.forEach((cat) => {
         perCat[cat.name] = { count: 0 };
       });
+      let unknownCount = 0;
+      let unknownColor = DEFAULT_UNKNOWN_CAT_COLOR;
       visits.forEach((v) => {
-        perCat[v.cat.name].count += 1;
+        if (v.cat.name === UNKNOWN_CAT_LABEL) {
+          unknownCount += 1;
+          unknownColor = v.cat.color;
+        } else {
+          perCat[v.cat.name].count += 1;
+        }
       });
       const totalCount = visits.length;
-      const catLine = cfg.cats
-        .map((cat) => {
-          const p = perCat[cat.name];
-          return `<span class="usage-cat"><span class="dot" style="background:${cat.color}"></span>${cat.name}: ${p.count}</span>`;
-        })
-        .join('');
+      const catLine =
+        cfg.cats
+          .map((cat) => {
+            const p = perCat[cat.name];
+            return `<span class="usage-cat"><span class="dot" style="background:${cat.color}"></span>${cat.name}: ${p.count}</span>`;
+          })
+          .join('') +
+        (unknownCount > 0
+          ? `<span class="usage-cat"><span class="dot" style="background:${unknownColor}"></span>${UNKNOWN_CAT_LABEL}: ${unknownCount}</span>`
+          : '');
       usageBody.innerHTML = `
         <div class="usage-row">
           <div class="stat-value">${totalCount} time${totalCount === 1 ? '' : 's'}</div>
@@ -624,52 +659,32 @@ export class PetkitPuramaxCard extends HTMLElement {
       `;
     }
 
-    // Working Records has exactly one source of truth for "a real visit
-    // happened": the total_use/last_used_by reconstruction (`allVisits`,
-    // including visits that couldn't be attributed to a configured cat --
-    // it's still a real visit). last_event is used ONLY for genuinely
-    // distinct device-status events below (maintenance/cleaning/odor/
-    // errors); its own "<cat> used the litter box" narration is always
-    // redundant with a row here and is unconditionally excluded, not
-    // merged in and then de-duplicated -- see VISIT_NARRATION_PATTERN.
-    const records = allVisits.map((v) => ({
-      ts: v.ts,
-      icon: v.cat ? 'mdi:cat' : 'mdi:help-circle-outline',
-      color: v.cat ? v.cat.color : 'var(--secondary-text-color)',
-      text: `${v.cat ? v.cat.name : 'Unknown cat'} just spent ${formatDuration(v.duration)} in the litter box`,
-    }));
+    // Working Records has exactly ONE source of truth, and it's `last_event`
+    // -- rendered VERBATIM, never a computed re-phrasing and never
+    // interpreted through a pattern/regex. Every row PETKIT reports is
+    // shown, in the exact words it used, in arrival order; the only
+    // filtering is an explicit, configurable list of raw values to hide
+    // entirely (`event_exclude`) -- no guessing at "is this a duplicate" or
+    // "is this a visit." There is also deliberately no cross-reference back
+    // to the total_use/last_used_by reconstruction that drives the chart/
+    // usage/analytics above: merging two independently-computed views of
+    // "what happened" and reconciling them with dedupe logic is exactly
+    // what caused a string of real bugs before (see git history / issues
+    // #13, #14, #16) -- a single, unmodified stream has no reconciliation
+    // to get wrong. Trade-off accepted: a Working Records visit row carries
+    // no duration (that's still visible via the chart tooltip and the
+    // Usage section above).
     const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
-    // Coordinators/integrations occasionally flicker an entity to
-    // unavailable/unknown and back to whatever value it held right before
-    // the blip -- that recovery is a re-assertion of the same event, not a
-    // new one, so it must not become a second Working Records row. This is
-    // deliberately narrower than "same value as the last one we saw": two
-    // GENUINELY separate real events can legitimately carry identical text
-    // with nothing hidden between them (e.g. two "Auto cleaning done"
-    // events on the same day) -- collapsing those would silently drop a
-    // real event. So this only fires when the value repeats AND the point
-    // immediately before it (in raw arrival order, before any filtering)
-    // was itself a hidden placeholder state -- precisely the
-    // unavailable-then-recovers-to-the-same-value signature.
-    let lastRealVal = null;
-    let prevWasHidden = false;
-    eventHist.forEach((point) => {
-      const val = point.s ?? point.state;
-      const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
-      if (!val || !ts) return;
-      if (val in eventLabels && eventLabels[val] === null) {
-        prevWasHidden = true;
-        return;
-      }
-      const isFlickerRecovery = prevWasHidden && val === lastRealVal;
-      lastRealVal = val;
-      prevWasHidden = false;
-      if (isFlickerRecovery) return;
-      if (VISIT_NARRATION_PATTERN.test(val)) return;
-      const label = eventLabels[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-      records.push({ ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: label });
-    });
+    const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
+    const records = eventHist
+      .map((point) => {
+        const val = point.s ?? point.state;
+        const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
+        if (!val || !ts || excludeList.includes(val.toLowerCase())) return null;
+        return { ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: eventLabels[val] || val };
+      })
+      .filter(Boolean);
     records.sort((a, b) => b.ts - a.ts);
 
     if (recordsList) {

@@ -412,7 +412,7 @@ describe('PetkitPuramaxCard: rendering', () => {
 });
 
 describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => {
-  it('hides unavailable/unknown/no_events_yet by default, showing only real device events', async () => {
+  it('hides unavailable/unknown/no_events_yet by default (DEFAULT_EVENT_EXCLUDE), showing only real device events', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -434,8 +434,8 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
     expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
   });
 
-  it('a user can hide any other noisy state themselves via event_labels: null (the general mechanism)', async () => {
-    const cfg = baseConfig({ event_labels: { some_noisy_state: null } });
+  it('a user can replace the exclude list via event_exclude config to hide a different/additional raw state', async () => {
+    const cfg = baseConfig({ event_exclude: ['some_noisy_state'] });
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
@@ -453,19 +453,46 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
     expect(rows.length).toBe(1);
     expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
   });
+
+  it('event_exclude matches case-insensitively against the exact raw state, never a substring/pattern', async () => {
+    // Confirms the exclude list can never accidentally hide a real
+    // "Unknown used the litter box" visit narration just because it
+    // contains the word "unknown" -- only an EXACT match to the bare
+    // special-state is excluded.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [
+      { s: 'UNAVAILABLE', lu: Math.floor(today9am.getTime() / 1000) }, // different case, still excluded
+      { s: 'Unknown used the litter box', lu: Math.floor(today9am.getTime() / 1000) + 60 }, // NOT excluded
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Unknown used the litter box');
+  });
 });
 
-describe('PetkitPuramaxCard: Working Records has one source of truth for visits (refs #13, #14, #16)', () => {
+describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no synthesis or pattern-matching (refs #13, #14, #16)', () => {
   // Working Records used to merge total_use-derived visits AND last_event's
-  // own "<cat> used the litter box" narration, then tried to de-duplicate
-  // the two when they described the same event -- fragile, and it kept
-  // producing new bugs (issues #13, #14). It's simpler and more robust to
-  // never show the narration at all: total_use/last_used_by is the single
-  // source of truth for "a visit happened" (it's also richer -- it has
-  // duration), so last_event's redundant narration is unconditionally
-  // excluded, regardless of whether a matching total_use visit exists.
+  // own narration, dedupe-reconciling the two -- fragile, and it kept
+  // producing new bugs (issues #13, #14). It was then changed to a single
+  // source (total_use/last_used_by) with a COMPUTED "<cat> just spent Ns"
+  // sentence, replacing last_event's own real text -- but that's still not
+  // what PETKIT actually reported. Working Records now shows last_event's
+  // raw history completely verbatim: no computed re-phrasing, no pattern
+  // used to detect "is this a visit," no cross-reference to total_use at
+  // all. Duration is intentionally not shown here (it's in the chart
+  // tooltip/Usage line instead, which still use the total_use/last_used_by
+  // reconstruction independently).
 
-  it('never shows a last_event "<cat> used the litter box" narration, even with no matching total_use visit', async () => {
+  it('shows a visit narration completely verbatim, with no duration and no re-phrasing', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -482,10 +509,12 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
     card.hass = hass;
     await flush();
 
-    expect(card.shadowRoot.querySelectorAll('.record-row').length).toBe(0);
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A used the litter box');
   });
 
-  it('also hides an "Unknown used the litter box" narration (device failed to identify the cat), not just recognized cat names', async () => {
+  it('shows an "Unknown used the litter box" narration verbatim too (device failed to identify the cat)', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -502,21 +531,23 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
     card.hass = hass;
     await flush();
 
-    expect(card.shadowRoot.querySelectorAll('.record-row').length).toBe(0);
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Unknown used the litter box');
   });
 
-  it('a real visit shows exactly once, as the richer total_use-derived stem row, never as the last_event narration too', async () => {
+  it('does not require or read total_use at all -- Working Records is independent of the chart/analytics reconstruction', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
     today9am.setHours(9, 0, 0, 0);
     const visitTs = Math.floor(today9am.getTime() / 1000);
-    const totalUsePoints = [
-      { s: '0', lu: visitTs - 60 },
-      { s: '146', lu: visitTs }, // 2m26s visit
-    ];
-    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs + 2 }]; // real write-order lag
+    // total_use has NO matching delta at all near this narration -- under
+    // the old "cross-reference total_use" design this row would have been
+    // dropped; verbatim last_event has no such dependency.
+    const totalUsePoints = [{ s: '0', lu: visitTs - 3600 }];
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
       if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
@@ -532,15 +563,10 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     expect(rows.length).toBe(1);
-    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A just spent 2m26s in the litter box');
+    expect(rows[0].querySelector('.record-text').textContent).toBe('Cat A used the litter box');
   });
 
-  it('a visit total_use can\'t attribute to any configured cat still shows once, labeled "Unknown cat"', async () => {
-    // The device's own AI cat-recognition can fail (real observed state:
-    // last_used_by reports "unknown_pet", outside the configured cats).
-    // The visit still really happened -- total_use is the single source of
-    // truth for that -- so it must not vanish from Working Records just
-    // because the identity couldn't be resolved.
+  it('a visit unattributable to any configured cat (last_used_by "unknown_pet") still plots as a gray chart stem, not just a record', async () => {
     const cfg = baseConfig({
       device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
       cats: [
@@ -571,18 +597,23 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
     card.hass = hass;
     await flush();
 
-    const rows = card.shadowRoot.querySelectorAll('.record-row');
-    expect(rows.length).toBe(1);
-    expect(rows[0].querySelector('.record-text').textContent).toBe('Unknown cat just spent 43s in the litter box');
-    // ...but does NOT appear as a chart stem or count toward any named cat's usage total (unaffected by this change).
-    expect(card.shadowRoot.querySelectorAll('.visit-point').length).toBe(0);
-    expect(card.shadowRoot.getElementById('usage-body').textContent).toContain('0 times');
+    // Plots as a gray "Unknown" stem (not dropped) but does not count
+    // toward any named cat's Usage total.
+    expect(card.shadowRoot.querySelectorAll('.visit-point').length).toBe(1);
+    const usageText = card.shadowRoot.getElementById('usage-body').textContent;
+    expect(usageText).toContain('1 time');
+    expect(usageText).toContain('Unknown: 1');
+    expect(usageText).toContain('Cat A: 0');
+    expect(usageText).toContain('Cat B: 0');
   });
 
-  it('still suppresses a genuine unavailable-flicker duplicate for a non-visit device event', async () => {
-    // The flicker-dedupe (v0.3.0) is still needed for events other than
-    // visit narrations, e.g. two "Auto cleaning done" entries where the
-    // second is just a coordinator hiccup re-asserting the same value.
+  it('shows two rows for the same repeated text with no dedupe of any kind, even across an unavailable gap', async () => {
+    // REGRESSION: a real captured case (2026-07-16) had two genuinely
+    // separate "Cat A used the litter box" visits with an unavailable blip
+    // in between and identical text on both sides -- a text-equality-based
+    // flicker-dedupe would have wrongly collapsed this into one row,
+    // silently dropping a real visit. Working Records applies no dedupe of
+    // any kind, so both real rows always show.
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -590,10 +621,9 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
     today9am.setHours(9, 0, 0, 0);
     const t0 = Math.floor(today9am.getTime() / 1000);
     const lastEventHistory = [
-      { s: 'auto_cleaning_completed', lu: t0 },
+      { s: 'Cat A used the litter box', lu: t0 },
       { s: 'unavailable', lu: t0 + 60 },
-      { s: 'auto_cleaning_completed', lu: t0 + 120 }, // flicker recovery, must be suppressed
-      { s: 'maintenance_mode', lu: t0 + 180 },
+      { s: 'Cat A used the litter box', lu: t0 + 120 }, // a real, separate second visit
     ];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
@@ -607,11 +637,10 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts.filter((t) => t === 'Auto cleaning done').length).toBe(1);
-    expect(rows.length).toBe(2);
+    expect(texts.filter((t) => t === 'Cat A used the litter box').length).toBe(2);
   });
 
-  it('shows two separate rows for two genuinely distinct occurrences of the same non-visit event with no flicker between them', async () => {
+  it('event_labels relabels a known status state but never touches a visit narration', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -620,22 +649,17 @@ describe('PetkitPuramaxCard: Working Records has one source of truth for visits 
     const t0 = Math.floor(today9am.getTime() / 1000);
     const lastEventHistory = [
       { s: 'auto_cleaning_completed', lu: t0 },
-      { s: 'maintenance_mode', lu: t0 + 60 },
-      { s: 'auto_cleaning_completed', lu: t0 + 120 },
+      { s: 'Cat A used the litter box', lu: t0 + 60 },
     ];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
-    hass.callWS = vi.fn().mockImplementation((req) => {
-      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
-        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
-      }
-      return Promise.resolve({});
-    });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
     card.hass = hass;
     await flush();
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts.filter((t) => t === 'Auto cleaning done').length).toBe(2);
+    expect(texts).toContain('Auto cleaning done');
+    expect(texts).toContain('Cat A used the litter box');
   });
 });
 

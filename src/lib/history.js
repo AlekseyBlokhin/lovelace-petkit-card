@@ -134,12 +134,38 @@ export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinit
 }
 
 /**
+ * PetKit PURAMAX firmware's own placeholder identity value on `last_used_by`
+ * for a visit whose cat it couldn't recognize (as opposed to `unavailable`/
+ * `no_record_yet`, which mean "no assertion at all", not "asserting
+ * unknown"). Verified live: this is written in real time, in lockstep with
+ * `total_use` (sub-millisecond gap, same as any other identity write) --
+ * it is a real, meaningful identity value, not noise.
+ *
+ * @type {string}
+ */
+export const UNKNOWN_CAT_STATE = 'unknown_pet';
+
+/** The identity `catChangeEvents` reports for `UNKNOWN_CAT_STATE`. @type {string} */
+export const UNKNOWN_CAT_LABEL = 'Unknown';
+
+/**
  * Extracts identity-change events from an identity/label sensor's history
- * (e.g. a device's "last used by" sensor), keeping only points whose state
- * is one of `knownNames`. Devices commonly write transient placeholder
+ * (e.g. a device's "last used by" sensor), keeping points whose state is
+ * either one of `knownNames` or `UNKNOWN_CAT_STATE` (mapped to
+ * `UNKNOWN_CAT_LABEL`). Devices commonly write OTHER transient placeholder
  * states (`unavailable`, `no_record_yet`, ...) between real values on every
- * coordinator refresh — those aren't a change of identity and are dropped
- * here rather than passed on to `attributeCats`.
+ * coordinator refresh -- those aren't an identity assertion at all and are
+ * dropped here rather than passed on to `attributeCats`.
+ *
+ * REGRESSION (reported live, 2026-07-16): `UNKNOWN_CAT_STATE` used to be
+ * dropped right along with the genuine noise states above, because it
+ * isn't a member of `knownNames` -- so a real "the device couldn't
+ * identify this cat" assertion silently vanished, and carry-forward
+ * attribution just kept whatever configured cat was attributed to the
+ * PREVIOUS visit instead. Two real visits that day were misattributed this
+ * way (06:15 and 14:05 local, both really unidentified, both shown as the
+ * previous known cat). See `history.test.js` for the fixtures taken from
+ * this device's real history.
  *
  * @param {Array<{ s?: string, state?: string, lu?: number, last_changed?: string }>} historyForEntity
  * @param {string[]} knownNames
@@ -151,58 +177,47 @@ export function catChangeEvents(historyForEntity, knownNames) {
   const events = [];
   for (const point of historyForEntity) {
     const state = point.s ?? point.state;
-    if (!nameSet.has(state)) continue;
+    let cat;
+    if (nameSet.has(state)) cat = state;
+    else if (state === UNKNOWN_CAT_STATE) cat = UNKNOWN_CAT_LABEL;
+    else continue;
     const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
     if (!ts || Number.isNaN(ts)) continue;
-    events.push({ cat: state, ts });
+    events.push({ cat, ts });
   }
   events.sort((a, b) => a.ts - b.ts);
   return events;
 }
 
 /**
- * How far AFTER a duration event's own timestamp a cat-change event may
- * still land and be treated as belonging to that same visit, rather than
- * the next one.
+ * Attributes each duration event (a real `total_use` visit) to a cat, using
+ * nearest-neighbor matching against `catChangeEvents` rather than a forward
+ * carry-forward-plus-fixed-tolerance window.
  *
- * This exists because of a real, consistently-observed write-order lag on
- * PetKit PURAMAX: for a single physical visit, the device/integration
- * writes `total_use` (the duration signal) fractionally BEFORE
- * `last_used_by`/`last_event` (the identity signal) -- never at the exact
- * same instant, and never the other way around. Measured against three
- * days of this device's real history (`lu` timestamps carry full
- * sub-second precision over the WS API, they are NOT truncated to whole
- * seconds): the gap for a matching same-visit pair was consistently a few
- * milliseconds, with one outlier at ~1.1s. The smallest gap seen between
- * two genuinely DIFFERENT visits was ~68s (litter box visits physically
- * can't happen close together -- the shortest real visit duration observed
- * was 27s, before any cooldown/cleaning cycle). 15s sits comfortably
- * between those two numbers.
+ * REGRESSION (reported live, 2026-07-16): a real `last_used_by` write can
+ * lag its matching `total_use` write by far more than a few seconds -- one
+ * captured case lagged by ~90s (vs. the ~1.1s worst case measured
+ * previously, which is where the old fixed 15s tolerance came from). But a
+ * tolerance wide enough to always catch a ~90s lag is unsafe on its own:
+ * real gaps between consecutive DIFFERENT visits can be much smaller than
+ * that (an ~11s gap between two real visits was also captured), so a wide
+ * fixed window risks reaching past the correct visit and stealing a
+ * later/different visit's own identity write.
  *
- * A strict "cat-change event at or BEFORE this duration event" carry
- * forward (no tolerance) misses the visit's own identity write every
- * time, because that write's timestamp is always slightly later --
- * shifting every attribution back by one visit. This was a real, reported
- * bug (a cat's real last visit showing as the previous cat, and two
- * same-cat visits in a row showing as two different cats) that went
- * uncaught because the original test fixtures used exact-timestamp
- * matches, which never occurs in real data. See `history.test.js` for the
- * regression fixtures taken from live captured timestamps.
- *
- * @type {number}
- */
-export const CAT_ATTRIBUTION_TOLERANCE_MS = 15000;
-
-/**
- * Attributes each duration event to a cat via carry-forward (last
- * observation carried forward): the cat in effect is whichever
- * `catChangeEvents` entry most recently occurred at or before that event's
- * timestamp (plus `toleranceMs`, see `CAT_ATTRIBUTION_TOLERANCE_MS`). This
- * is deliberately not an exact-timestamp match — when the same cat visits
- * twice in a row, most PetKit integrations don't emit a new "last used by"
- * state (the value didn't change), so there's no change event to match
- * against the second visit; the correct answer for it is still "whoever
- * the last known cat was."
+ * The safe fix is adaptive, not a bigger constant: each duration event
+ * only ever considers `catChangeEvents` within its own "territory" -- the
+ * time span from the midpoint to the PREVIOUS duration event, to the
+ * midpoint to the NEXT one. Every cat-change event falls into exactly one
+ * territory (whichever duration event it's chronologically closest to),
+ * so an event can never be pulled across a neighboring real visit no
+ * matter how large its own lag turns out to be, while a visit with no
+ * competing neighbor nearby can still reach arbitrarily far (in either
+ * direction) to find its own lagged identity write. Within a territory,
+ * the cat-change event nearest the visit's own timestamp wins; if a
+ * territory has none at all, the visit carries forward whatever cat was
+ * last resolved (same "repeat visit by the same cat" semantics as before
+ * -- most PetKit integrations don't emit a new `last_used_by` state when
+ * the same cat visits again immediately).
  *
  * `catEvents` must already be sorted by `ts` ascending (as returned by
  * `catChangeEvents`). `durationEvents` is assumed sorted by `ts` ascending
@@ -210,18 +225,44 @@ export const CAT_ATTRIBUTION_TOLERANCE_MS = 15000;
  *
  * @param {Array<{ value: number, ts: number }>} durationEvents
  * @param {Array<{ cat: string, ts: number }>} catEvents
- * @param {{ toleranceMs?: number }} [options]
  * @returns {Array<{ value: number, ts: number, cat: string|null }>}
  */
-export function attributeCats(durationEvents, catEvents, { toleranceMs = CAT_ATTRIBUTION_TOLERANCE_MS } = {}) {
-  let idx = 0;
-  let current = null;
-  return durationEvents.map((event) => {
-    while (idx < catEvents.length && catEvents[idx].ts <= event.ts + toleranceMs) {
-      current = catEvents[idx].cat;
-      idx++;
+export function attributeCats(durationEvents, catEvents) {
+  const n = durationEvents.length;
+  const resolved = new Array(n).fill(null);
+  let ceIdx = 0;
+  let carried = null;
+  for (let i = 0; i < n; i++) {
+    const ts = durationEvents[i].ts;
+    const lowerBound = i === 0 ? -Infinity : (durationEvents[i - 1].ts + ts) / 2;
+    const upperBound = i === n - 1 ? Infinity : (ts + durationEvents[i + 1].ts) / 2;
+
+    // Cat-change events strictly before this territory belong to an
+    // earlier (already-resolved) territory or seed the very first one --
+    // just fold them into the carried-forward value as we pass.
+    while (ceIdx < catEvents.length && catEvents[ceIdx].ts < lowerBound) {
+      carried = catEvents[ceIdx].cat;
+      ceIdx++;
     }
-    return { ...event, cat: current };
-  });
+
+    // Within this territory, this visit's own attribution is whichever
+    // cat-change event lands NEAREST its own timestamp (may be before or
+    // after); `carried` still advances to the chronologically LAST one in
+    // the territory, for the next visit to inherit if it has none of its
+    // own.
+    let nearest = null;
+    let nearestDist = Infinity;
+    while (ceIdx < catEvents.length && catEvents[ceIdx].ts < upperBound) {
+      const dist = Math.abs(catEvents[ceIdx].ts - ts);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = catEvents[ceIdx].cat;
+      }
+      carried = catEvents[ceIdx].cat;
+      ceIdx++;
+    }
+    resolved[i] = nearest !== null ? nearest : carried;
+  }
+  return durationEvents.map((e, i) => ({ ...e, cat: resolved[i] }));
 }
 

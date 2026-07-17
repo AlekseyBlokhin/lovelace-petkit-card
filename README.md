@@ -20,11 +20,13 @@ sensors your PetKit integration already provides.
   in YAML, no code changes).
 - A day-switchable per-cat visit chart (a 0-24h "stem plot"), reconstructed
   from the device's `total_use`/`last_used_by` sensors — no per-cat helper
-  entities needed.
-- A Working Records timeline: every real visit (from the same `total_use`/
-  `last_used_by` reconstruction as the chart — a single source of truth,
-  not a second independent guess) plus genuinely distinct device events
-  (maintenance, cleaning, odor removal, errors).
+  entities needed. A visit the device itself couldn't identify a cat for
+  plots as a neutral gray "Unknown" stem rather than being dropped.
+- A Working Records timeline: the device's own `last_event` history, shown
+  verbatim — the literal text PETKIT reported, not a computed
+  re-phrasing. No duration (that's in the chart/Usage line instead), and no
+  attempt to detect or reinterpret a "visit" row via pattern-matching --
+  see *How Working Records works* below.
 - Today / 3-day-avg / 7-day-avg per-cat analytics, with a decline/spike
   warning banner.
 - A per-cat "no visit in N hours" alert banner (configurable, default 8h),
@@ -96,7 +98,9 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `device_entities.error` | no | entity id | — | Sensor reporting the device's current error/status code. |
 | `device_entities.last_event` | no | entity id | — | Sensor reporting the device's most recent maintenance/cleaning event. |
 | `device_entities.state` | no | entity id | — | Sensor reporting the device's current operating state (used by the `toggle_maintenance` control action). |
-| `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Lets you relabel or add event states without editing the card. Set a state's value to `null` to hide it from Working Records entirely — see note below. YAML-only — no visual editor field. |
+| `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
+| `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from Working Records entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
+| `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for (`last_used_by` reporting PURAMAX's `unknown_pet` placeholder). Unrelated to Working Records, which never inspects visit identity. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See below. |
 | `cats[].name` | yes | string | — | Display name. Must exactly match this cat's value as reported by `device_entities.last_used_by` — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
 | `cats[].color` | yes | string (CSS color) | — | Chart/legend color for this cat. Picked via HA's native color selector in the visual editor. |
@@ -123,19 +127,16 @@ full example at [`examples/dashboard-config.yaml`](./examples/dashboard-config.y
 | `notify_service` | no | entity id (`notify` domain) | — | If set, also calls this notify entity/service (once per overdue episode, not on every re-render) when a cat crosses `no_visit_alert_hours`. This only fires while the card is actually loaded in a browser/companion-app tab — for a guarantee independent of whether a dashboard is open, pair it with (or use instead) a native HA automation. |
 
 `cats`, `info_row`, and `controls_row` all have a repeating-row visual
-editor (add/remove buttons); `value_map` and `event_labels` are YAML-only
-for v1 since an arbitrary object-of-strings has no clean `ha-form` widget.
+editor (add/remove buttons); `value_map`, `event_labels`, and
+`event_exclude` are YAML-only since an arbitrary object/array has no clean
+`ha-form` widget.
 
-Set any event's value to `null` in `event_labels` to hide it from Working
-Records entirely — this is the general mechanism for filtering out noisy
-states (the defaults already hide `no_events_yet`, `unavailable`, and
-`unknown` this way).
+## How the chart, Usage line, and Analytics work
 
-## How per-cat visit reconstruction works
-
-There's no helper entity and no companion automation to set up — the card
-derives every visit's duration and cat identity purely from history it
-already fetches:
+There's no helper entity and no companion automation to set up — these are
+derived purely from `total_use`/`last_used_by` history the card already
+fetches (Working Records does NOT use this reconstruction at all — see the
+next section):
 
 1. **Duration**: `device_entities.total_use` is a running counter that
    bumps by one visit's duration on every use. The delta between
@@ -145,36 +146,52 @@ already fetches:
    real visit.
 2. **Identity** (only fetched/needed with more than one cat):
    `device_entities.last_used_by` reports which cat used the box most
-   recently, but most PetKit integrations only write a *new* state when the
-   identity actually changes — two visits by the same cat in a row don't
-   produce a second history point. The card attributes each duration event
-   to whichever cat was most recently reported *at or before* that event's
-   timestamp, plus a small tolerance window (carry-forward with lag
-   tolerance), which correctly handles both repeat visits by the same cat
-   and a real write-order quirk: for a single physical visit, the device
-   consistently writes `total_use` a few milliseconds — occasionally over a
-   second — *before* `last_used_by`, never at the exact same instant. A
-   strict "at or before" match would miss the visit's own identity write
-   every time and attribute it to the *previous* visit's cat instead. See
-   `CAT_ATTRIBUTION_TOLERANCE_MS` in `src/lib/history.js` for the real
-   captured data this was measured from.
+   recently — either a configured cat's name, or PURAMAX's own
+   `unknown_pet` placeholder when the device couldn't identify the cat
+   (kept as a real "Unknown" identity, not dropped as noise). Most PetKit
+   integrations only write a *new* state when the identity actually
+   changes — two visits by the same cat in a row don't produce a second
+   history point — so attribution is nearest-neighbor matching, not an
+   exact-timestamp match: each visit is bounded to a "territory" (the
+   midpoint to the previous real visit, to the midpoint to the next one)
+   and takes whichever identity write lands nearest its own timestamp
+   within that span, or carries forward the last resolved identity if its
+   territory has none of its own. This correctly handles both repeat
+   visits by the same cat and a real write-order quirk where
+   `last_used_by`'s write for a visit can lag `total_use`'s by anywhere
+   from milliseconds to (rarely) well over a minute — a fixed tolerance
+   window can't safely cover that whole range (a wide-enough window risks
+   stealing a *different*, nearby real visit's own identity write instead),
+   but a territory bounded by real neighboring visits can, without ever
+   reaching across one. See `attributeCats` in `src/lib/history.js` for the
+   real captured data this was measured from.
 3. **Glitch filtering**: a positive `total_use` delta that the very next
    reading undoes exactly (the value returns to precisely its pre-delta
    level, usually within seconds) is discarded rather than read as a real
    visit — a genuine increment is permanent and never reverts like that.
 
-A visit that can't be attributed to any configured cat (the device's own
-cat-recognition can fail) still appears in Working Records, labeled
-"Unknown cat" — it's a real visit, not silently dropped — but isn't plotted
-on the chart or counted in any cat's totals, since those are inherently
-per-named-cat views.
+A visit attributed to "Unknown" plots as a neutral gray chart stem and
+appears in the Usage line's legend on any day it occurs, but never counts
+toward a configured cat's Analytics totals (those are inherently
+per-named-cat views).
 
-`device_entities.last_event`, when configured, contributes only genuinely
-distinct device-status events (maintenance, cleaning, odor removal,
-errors) to Working Records — never a second, redundant description of a
-visit. `total_use`/`last_used_by` is the single source of truth for "did a
-visit happen"; `last_event`'s own "`<cat>` used the litter box" narration
-of that same event is always excluded.
+## How Working Records works
+
+Working Records is `device_entities.last_event`'s own history, shown
+**verbatim** — the exact text PETKIT reported, in arrival order. The only
+filtering is `event_exclude` (an explicit, configurable list of raw values
+to hide entirely) and `event_labels` (a purely cosmetic exact-match
+rename). There is no pattern-matching against the text to detect "is this a
+visit," no synthesized re-phrasing, and no cross-reference back to the
+`total_use`/`last_used_by` reconstruction above — merging two
+independently-computed views of "what happened" and reconciling them with
+dedupe logic is exactly what caused a string of real bugs in earlier
+versions of this card (duplicate rows, phantom rows, a real visit silently
+collapsed by a dedupe heuristic that couldn't tell it apart from a
+connectivity-blip artifact). A single, unmodified stream has none of that
+to get wrong — trade-off accepted: a Working Records visit row has no
+duration (still visible via the chart tooltip and the Usage line, which use
+the `total_use` reconstruction instead).
 
 ## Supported devices
 

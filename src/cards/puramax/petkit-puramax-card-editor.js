@@ -119,6 +119,11 @@ const MAIN_SCHEMA = [
         label: 'Push a notification too (optional)',
         selector: { entity: { domain: 'notify' } },
       },
+      {
+        name: 'unknown_cat_color',
+        label: 'Unidentified-visit color (chart & analytics)',
+        selector: { ui_color: {} },
+      },
     ],
   },
 ];
@@ -177,6 +182,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       decline_threshold_pct: cfg.decline_threshold_pct,
       no_visit_alert_hours: cfg.no_visit_alert_hours,
       notify_service: cfg.notify_service,
+      unknown_cat_color: cfg.unknown_cat_color,
     };
   }
 
@@ -194,6 +200,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     cfg.decline_threshold_pct = flatValue.decline_threshold_pct;
     cfg.no_visit_alert_hours = flatValue.no_visit_alert_hours;
     cfg.notify_service = flatValue.notify_service;
+    cfg.unknown_cat_color = flatValue.unknown_cat_color;
     this._fireConfigChanged(cfg);
   }
 
