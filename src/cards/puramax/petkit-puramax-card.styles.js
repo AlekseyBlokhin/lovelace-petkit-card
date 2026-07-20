@@ -4,23 +4,46 @@
  * data, not logic.
  */
 export const CARD_STYLES = `
-  ha-card { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  /* Shared design tokens -- every gap/padding/border-radius below reuses one
+     of these instead of repeating its own literal, so there's a single place
+     to see (and change) the spacing/radius scale this card uses. Values are
+     unchanged from what was previously hard-coded per rule; this is a pure
+     naming pass, not a re-design. */
+  :host {
+    --pk-space-3xs: 2px;
+    --pk-space-2xs: 4px;
+    --pk-space-xs: 6px;
+    --pk-space-sm: 8px;
+    --pk-space-md: 10px;
+    --pk-space-lg: 12px;
+    --pk-space-xl: 14px;
+    --pk-space-2xl: 16px;
+    --pk-radius-sm: 6px;
+    --pk-radius-md: 8px;
+    --pk-radius-lg: 10px;
+    /* Analytics table column widths, shared by every cat's table (see
+       .col-name/.col-stat below) so columns line up across cats regardless
+       of how long any one cat's numbers happen to render. */
+    --pk-analytics-name-col: 34%;
+    --pk-analytics-stat-col: 22%;
+  }
+  ha-card { padding: var(--pk-space-2xl); display: flex; flex-direction: column; gap: var(--pk-space-xl); }
   .header { display: flex; align-items: center; justify-content: space-between; }
   .title { font-size: 1.2em; font-weight: 500; color: var(--primary-text-color); }
-  .status-row { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip { display: flex; align-items: center; gap: 6px; background: var(--secondary-background-color); border-radius: 10px; padding: 6px 10px; flex: 1 1 auto; min-width: 100px; }
+  .status-row { display: flex; flex-wrap: wrap; gap: var(--pk-space-sm); }
+  .chip { display: flex; align-items: center; gap: var(--pk-space-xs); background: var(--secondary-background-color); border-radius: var(--pk-radius-lg); padding: var(--pk-space-xs) var(--pk-space-md); flex: 1 1 auto; min-width: 100px; }
   .chip.warn { background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); }
   .chip.warn ha-icon { color: var(--warning-color); }
   .chip-label { font-size: 0.7em; color: var(--secondary-text-color); }
   .chip-value { font-size: 0.95em; color: var(--primary-text-color); font-weight: 500; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .controls-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-  .ctrl-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; background: var(--secondary-background-color); border: none; border-radius: 10px; padding: 10px 4px; color: var(--primary-text-color); cursor: pointer; font-size: 0.75em; }
+  .controls-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pk-space-sm); }
+  .ctrl-btn { display: flex; flex-direction: column; align-items: center; gap: var(--pk-space-2xs); background: var(--secondary-background-color); border: none; border-radius: var(--pk-radius-lg); padding: var(--pk-space-md) var(--pk-space-2xs); color: var(--primary-text-color); cursor: pointer; font-size: 0.75em; }
   .ctrl-btn:hover { background: var(--divider-color); }
   .ctrl-btn ha-icon { color: var(--state-icon-color, var(--primary-color)); }
   .chart-section { display: flex; flex-direction: column; gap: 0; }
-  .chart-header { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 6px; }
-  .nav-btn { background: none; border: none; color: var(--primary-text-color); font-size: 1em; cursor: pointer; padding: 4px 10px; border-radius: 8px; }
+  .chart-header { display: flex; align-items: center; justify-content: center; gap: var(--pk-space-2xl); margin-bottom: var(--pk-space-xs); }
+  .nav-btn { background: none; border: none; color: var(--primary-text-color); font-size: 1em; cursor: pointer; padding: var(--pk-space-2xs) var(--pk-space-md); border-radius: var(--pk-radius-md); }
   .nav-btn:hover { background: var(--secondary-background-color); }
   .nav-btn:disabled { opacity: 0.3; cursor: default; }
   .day-label { font-weight: 500; color: var(--primary-text-color); min-width: 140px; text-align: center; }
@@ -49,16 +72,27 @@ export const CARD_STYLES = `
   .axis-label-y {
     position: absolute;
     left: 0;
-    /* Sized for the widest real label, 01'30" (Task 3's MM'SS" format,
-       ~6 characters) at 0.7em, plus a little breathing room before the
-       plot area -- see CHART_PADDING.left's comment for how this lines up
-       (approximately, by design) with the SVG's own left inset. */
-    width: 42px;
+    /* width is set inline per-render (see _renderChartArea's yAxisLabels),
+       as a percentage of the chart derived from the SAME CHART_PADDING.left
+       viewBox units the SVG plot itself uses -- NOT a fixed CSS px guessed
+       to "roughly" match it. A fixed px here (the previous approach) is a
+       real CSS pixel value that doesn't scale with the SVG's viewBox, while
+       CHART_PADDING.left is a viewBox unit that DOES scale with the card's
+       rendered width -- the two could only ever coincide at one specific
+       card width, and diverged everywhere else. That divergence is exactly
+       why stems for a visit at/near hour 0 (midnight) could render under
+       this label's text: the plot's left edge (xFor at hour 0) sits inside
+       where the fixed-px label column still was. Deriving width from
+       padding.left instead means the label's right edge and the plot's
+       left edge are always the same position, at any card width -- see
+       CHART_PADDING.left's own comment in petkit-puramax-card.const.js.
+       box-sizing:border-box + padding-right below keep the actual text
+       clear of that boundary by one more step (breathing room). */
     transform: translateY(-50%);
     font-size: 0.7em;
     color: var(--secondary-text-color);
     text-align: right;
-    padding-right: 4px;
+    padding-right: var(--pk-space-2xs);
     white-space: nowrap;
     box-sizing: border-box;
   }
@@ -82,11 +116,23 @@ export const CARD_STYLES = `
   .records-list { display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
   .record-row { display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--primary-text-color); }
   .record-time { color: var(--secondary-text-color); min-width: 46px; }
-  .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-  .cat-analytics table { width: 100%; font-size: 0.8em; color: var(--primary-text-color); border-collapse: collapse; }
-  .cat-analytics td { padding: 2px 4px; }
+  .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--pk-space-lg); }
+  /* table-layout: fixed + explicit .col-name/.col-stat widths (below) is
+     what actually keeps every cat's columns aligned. table-layout's default
+     (auto) sizes each table's columns from ITS OWN cells' content, so two
+     cats with differently-long numbers (e.g. "16.3" vs "4.3", "1m06s" vs
+     "58s") ended up with differently-positioned column boundaries even
+     though every table sits in an identically-sized grid cell. Fixed layout
+     ignores content width and just splits the table's own width by the
+     shared percentages below, so as long as every table is the same width
+     (guaranteed by .analytics-grid's equal-width grid tracks), every cat's
+     columns land in exactly the same place. */
+  .cat-analytics table { width: 100%; table-layout: fixed; font-size: 0.8em; color: var(--primary-text-color); border-collapse: collapse; }
+  .col-name { width: var(--pk-analytics-name-col); }
+  .col-stat { width: var(--pk-analytics-stat-col); }
+  .cat-analytics td { padding: var(--pk-space-3xs) var(--pk-space-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cat-analytics tr:first-child td { color: var(--secondary-text-color); font-size: 0.9em; }
-  .cat-name-cell { display: flex; align-items: center; gap: 6px; font-weight: 500; color: var(--primary-text-color) !important; font-size: 0.9em; }
-  .warn-banner { display: flex; align-items: center; gap: 8px; background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); color: var(--warning-color); border-radius: 8px; padding: 8px 10px; font-size: 0.85em; margin-bottom: 8px; }
-  .no-visit-banner { display: flex; align-items: center; gap: 8px; background: rgba(var(--rgb-state-error-color, 244,67,54), 0.15); color: var(--error-color); border-radius: 8px; padding: 8px 10px; font-size: 0.85em; margin-bottom: 8px; }
+  .cat-name-cell { display: flex; align-items: center; gap: var(--pk-space-xs); font-weight: 500; color: var(--primary-text-color) !important; font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; }
+  .warn-banner { display: flex; align-items: center; gap: var(--pk-space-sm); background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); color: var(--warning-color); border-radius: var(--pk-radius-md); padding: var(--pk-space-sm) var(--pk-space-md); font-size: 0.85em; margin-bottom: var(--pk-space-sm); }
+  .no-visit-banner { display: flex; align-items: center; gap: var(--pk-space-sm); background: rgba(var(--rgb-state-error-color, 244,67,54), 0.15); color: var(--error-color); border-radius: var(--pk-radius-md); padding: var(--pk-space-sm) var(--pk-space-md); font-size: 0.85em; margin-bottom: var(--pk-space-sm); }
 `;

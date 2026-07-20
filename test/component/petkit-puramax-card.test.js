@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PetkitPuramaxCard } from '../../src/cards/puramax/petkit-puramax-card.js';
 import { dayBounds } from '../../src/lib/day.js';
+import { CHART_WIDTH, CHART_PADDING } from '../../src/cards/puramax/petkit-puramax-card.const.js';
 
 if (!customElements.get('petkit-puramax-card')) {
   customElements.define('petkit-puramax-card', PetkitPuramaxCard);
@@ -362,6 +363,31 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(card.shadowRoot.querySelector('.cat-analytics b')).toBeNull();
     const nameCell = card.shadowRoot.querySelector('.cat-name-cell');
     expect(nameCell.textContent).toBe('<b>evil</b>');
+  });
+
+  it('gives every cat\'s analytics table the same shared column-width classes, so columns line up regardless of how long any one cat\'s numbers render (refs table-misalignment bug)', async () => {
+    const card = makeCard();
+    card.setConfig(
+      baseConfig({
+        device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
+        cats: [
+          { name: 'Cat A', color: '#111111' },
+          { name: 'Cat B', color: '#222222' },
+        ],
+      }),
+    );
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const tables = card.shadowRoot.querySelectorAll('.cat-analytics table');
+    expect(tables.length).toBe(2);
+    tables.forEach((table) => {
+      const colClasses = Array.from(table.querySelectorAll('colgroup col')).map((c) => c.className);
+      // Same classes, same order, in every table -- widths come from the
+      // shared .col-name/.col-stat CSS rules (petkit-puramax-card.styles.js,
+      // --pk-analytics-name-col/--pk-analytics-stat-col), never computed
+      // per-table from that cat's own cell content.
+      expect(colClasses).toEqual(['col-name', 'col-stat', 'col-stat', 'col-stat']);
+    });
   });
 
   it('Analytics "Duration" row shows the weighted average visit duration, not the total (refs #10)', async () => {
@@ -826,6 +852,14 @@ describe('PetkitPuramaxCard: chart axis labels (HTML overlay, not SVG text)', ()
     expect(xLabel.style.left).toMatch(/%$/);
     const yLabel = card.shadowRoot.querySelector('.axis-label-y');
     expect(yLabel.style.top).toMatch(/%$/);
+  });
+
+  it('sizes the y-axis label column from CHART_PADDING.left (not a fixed px), so it never overlaps a stem at hour 0 (refs midnight-overlap bug)', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const yLabel = card.shadowRoot.querySelector('.axis-label-y');
+    expect(yLabel.style.width).toBe(`${(CHART_PADDING.left / CHART_WIDTH) * 100}%`);
   });
 
   it('renders gridlines as solid hairlines (no stroke-dasharray)', async () => {

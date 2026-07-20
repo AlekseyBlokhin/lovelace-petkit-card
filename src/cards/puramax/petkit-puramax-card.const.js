@@ -76,12 +76,20 @@ export const CHART_HEIGHT = 240;
  * out of the SVG entirely (issue #5) so it can use a real, fixed CSS
  * font-size instead of a viewBox-scaled one. These paddings only need to
  * keep the plotted gridlines/stems clear of where the HTML label overlay
- * sits: `left` clears the fixed-width y-axis label column (see
- * `.axis-label-y` in petkit-puramax-card.styles.js, sized for the widest
- * "MM'SS\"" label), `bottom` reserves a thin band below the plot for the
- * x-axis label row. Both are approximations tuned for this card's typical
- * ~280-320px rendered width (see the `.chart-svg` comment) -- since the
- * HTML labels no longer scale with card width, alignment is not pixel-exact
- * at every card width, only "close enough by eye" at the typical size.
+ * sits: `left` clears the y-axis label column, `bottom` reserves a thin
+ * band below the plot for the x-axis label row.
+ *
+ * `left` is the SINGLE source of truth for the y-axis label column's width
+ * too: `_renderChartArea()` sets `.axis-label-y`'s inline `width` to
+ * `(padding.left / CHART_WIDTH) * 100` (a percentage of the chart, exactly
+ * matching where `xFor` places hour-0 on the x-axis), rather than the
+ * stylesheet guessing an independent fixed CSS px for that column. A fixed
+ * px there previously only "roughly" lined up with this padding at one
+ * specific rendered card width (px is real screen pixels; this padding is
+ * SVG viewBox units, which scale with the card's actual rendered width) --
+ * they diverged at every other width, which is what let a visit at/near
+ * hour 0 (midnight) render its stem under the label text. Deriving both
+ * from this one value keeps them aligned at any card width; if you need
+ * more/less clearance, change `left` here and both sides move together.
  */
 export const CHART_PADDING = { left: 46, right: 10, top: 10, bottom: 28 };
