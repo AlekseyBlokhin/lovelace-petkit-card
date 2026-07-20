@@ -8,13 +8,14 @@
  * settings pages group lists, and `ha-icon-button`/`ha-icon` for row
  * actions instead of plain text buttons.
  *
- * `ha-form`'s `expandable` schema type only groups fields visually, it does
- * NOT nest the bound data object. Since `device_entities` is nested in the
- * real config, this editor's internal working model for the main form is
- * kept FLAT (`device_entities_error`, `device_entities_last_event`,
- * `device_entities_state`) and is flattened/re-nested at the boundary
- * (`_flattenMain`/`_onMainFormChanged`) rather than binding `ha-form`
- * directly to a nested object.
+ * `ha-form`'s `expandable` schema type DOES nest the bound data object by
+ * default -- a group named e.g. `device_entities` reads/writes its
+ * sub-fields against `data.device_entities`, matching this card's real
+ * config shape exactly, so the main form binds directly to `this._config`
+ * with no manual flatten/reconstruct step. `flatten: true` is the opt-out
+ * for a group with no real backing object -- used below for `alerts`,
+ * which is a purely visual grouping over otherwise-top-level config keys
+ * (`decline_threshold_pct` etc. aren't actually nested under `cfg.alerts`).
  */
 
 // `name` must exactly match this cat's value as reported by
@@ -24,9 +25,17 @@
 //
 // `color` uses the native `ui_color` selector (a real HA color-picker
 // widget, not a hand-rolled swatch) rather than a plain hex-text field.
+// Wrapped in a nameless `grid` group so `ha-form` lays the two fields out
+// side-by-side instead of stacking them -- a nameless grid entry has no
+// data-nesting effect (see the MAIN_SCHEMA comment below), it's pure layout.
 const CAT_SCHEMA = [
-  { name: 'name', label: 'Name', selector: { text: {} } },
-  { name: 'color', label: 'Color', selector: { ui_color: {} } },
+  {
+    type: 'grid',
+    schema: [
+      { name: 'name', label: 'Name', selector: { text: {} } },
+      { name: 'color', label: 'Color', selector: { ui_color: {} } },
+    ],
+  },
 ];
 
 const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7' };
@@ -78,30 +87,34 @@ function controlsRowSchema(action) {
 const DEFAULT_NEW_CONTROL_ROW = { name: '', icon: 'mdi:gesture-tap-button', action: 'press', entity: '' };
 
 const MAIN_SCHEMA = [
-  { name: 'title', selector: { text: {} } },
+  { name: 'title', label: 'Title', selector: { text: {} } },
   {
     name: 'device_entities',
     type: 'expandable',
     title: 'Device entities',
     schema: [
       {
-        name: 'device_entities_total_use',
+        name: 'total_use',
         label: 'Total use sensor (required)',
         selector: { entity: {} },
       },
       {
-        name: 'device_entities_last_used_by',
+        name: 'last_used_by',
         label: 'Last used by sensor (required if more than one cat)',
         selector: { entity: {} },
       },
-      { name: 'device_entities_error', label: 'Error sensor', selector: { entity: {} } },
-      { name: 'device_entities_last_event', label: 'Last event sensor', selector: { entity: {} } },
-      { name: 'device_entities_state', label: 'State sensor', selector: { entity: {} } },
+      { name: 'error', label: 'Error sensor', selector: { entity: {} } },
+      { name: 'last_event', label: 'Last event sensor', selector: { entity: {} } },
+      { name: 'state', label: 'State sensor', selector: { entity: {} } },
     ],
   },
   {
     name: 'alerts',
     type: 'expandable',
+    // No real `cfg.alerts` object -- these are top-level config keys, only
+    // visually grouped here. Without `flatten`, ha-form would look for a
+    // (nonexistent) nested `data.alerts` object and nothing would preselect.
+    flatten: true,
     title: 'Analytics & alerts',
     schema: [
       {
@@ -129,9 +142,23 @@ const MAIN_SCHEMA = [
 ];
 
 export class PetkitPuramaxCardEditor extends HTMLElement {
+  // The dashboard host calls `setConfig()` again on every `config-changed`
+  // round-trip we ourselves fire -- i.e. on every value edit, not just when
+  // a genuinely different card config is assigned. A full `_render()` there
+  // would rebuild every `ha-expansion-panel` from scratch on every
+  // keystroke's round-trip, collapsing them back closed each time. Only do
+  // that full rebuild when the config's *structure* actually changed (a row
+  // was added/removed, or a controls_row action changed its visible
+  // sub-fields); otherwise just push the new data onto the existing forms.
   setConfig(config) {
-    this._config = config || {};
-    this._render();
+    const newConfig = config || {};
+    const needsFullRender = !this.shadowRoot || this._structureKey(newConfig) !== this._lastStructureKey;
+    this._config = newConfig;
+    if (needsFullRender) {
+      this._render();
+    } else {
+      this._updateFormsInPlace();
+    }
   }
 
   // `hass` is re-set constantly -- on essentially every state change
@@ -169,45 +196,62 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     );
   }
 
-  _flattenMain() {
-    const cfg = this._config || {};
-    const de = cfg.device_entities || {};
-    return {
-      title: cfg.title,
-      device_entities_total_use: de.total_use,
-      device_entities_last_used_by: de.last_used_by,
-      device_entities_error: de.error,
-      device_entities_last_event: de.last_event,
-      device_entities_state: de.state,
-      decline_threshold_pct: cfg.decline_threshold_pct,
-      no_visit_alert_hours: cfg.no_visit_alert_hours,
-      notify_service: cfg.notify_service,
-      unknown_cat_color: cfg.unknown_cat_color,
-    };
+  // Row counts (plus each controls_row entry's `action`, since that
+  // determines which sub-fields are visible) fingerprint whether the config
+  // changed *structurally*. A value-only edit keeps the same fingerprint --
+  // see `setConfig()`, which skips the full rebuild in that case so
+  // `ha-expansion-panel`s don't lose their open/closed state on every
+  // keystroke's round-trip through the dashboard host.
+  _structureKey(config) {
+    return JSON.stringify({
+      cats: (config.cats || []).length,
+      info_row: (config.info_row || []).length,
+      controls_row: (config.controls_row || []).map((c) => (c && c.action) || null),
+    });
   }
 
-  _onMainFormChanged(flatValue) {
-    const cfg = { ...this._config };
-    cfg.title = flatValue.title;
-    cfg.device_entities = {
-      ...(cfg.device_entities || {}),
-      total_use: flatValue.device_entities_total_use,
-      last_used_by: flatValue.device_entities_last_used_by,
-      error: flatValue.device_entities_error,
-      last_event: flatValue.device_entities_last_event,
-      state: flatValue.device_entities_state,
-    };
-    cfg.decline_threshold_pct = flatValue.decline_threshold_pct;
-    cfg.no_visit_alert_hours = flatValue.no_visit_alert_hours;
-    cfg.notify_service = flatValue.notify_service;
-    cfg.unknown_cat_color = flatValue.unknown_cat_color;
-    this._fireConfigChanged(cfg);
+  _capturePanelExpanded() {
+    if (!this.shadowRoot) return null;
+    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    return panels.length ? Array.from(panels).map((p) => /** @type {any} */ (p).expanded) : null;
+  }
+
+  _restorePanelExpanded(prevExpanded) {
+    if (!prevExpanded) return;
+    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    panels.forEach((/** @type {any} */ panel, i) => {
+      if (prevExpanded[i] !== undefined) panel.expanded = prevExpanded[i];
+    });
+  }
+
+  // Pushes updated data onto already-built form nodes in place, the same
+  // no-rebuild approach the `hass` setter above already uses -- for the
+  // common case of a plain value edit (add/remove still goes through a full
+  // `_render()`, since section counts genuinely changed).
+  _updateFormsInPlace() {
+    if (this._mainForm) this._mainForm.data = this._config;
+    const cats = this._config.cats || [];
+    (this._catForms || []).forEach((form, i) => {
+      if (cats[i]) form.data = cats[i];
+    });
+    const infoRows = this._config.info_row || [];
+    (this._infoForms || []).forEach((form, i) => {
+      if (infoRows[i]) form.data = infoRows[i];
+    });
+    const controlsRows = this._config.controls_row || [];
+    (this._controlForms || []).forEach((form, i) => {
+      if (controlsRows[i]) form.data = controlsRows[i];
+    });
   }
 
   _render() {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     if (!this._config) return;
+    const prevExpanded = this._capturePanelExpanded();
     this._formEls = [];
+    this._catForms = [];
+    this._infoForms = [];
+    this._controlForms = [];
     const catCount = (this._config.cats || []).length;
     const infoCount = (this._config.info_row || []).length;
     const controlCount = (this._config.controls_row || []).length;
@@ -273,6 +317,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._renderCats();
     this._renderInfoRows();
     this._renderControlsRows();
+    this._restorePanelExpanded(prevExpanded);
+    this._lastStructureKey = this._structureKey(this._config);
     this.shadowRoot.getElementById('add-cat').addEventListener('click', () => this._addCat());
     this.shadowRoot.getElementById('add-info-row').addEventListener('click', () => this._addInfoRow());
     this.shadowRoot.getElementById('add-control-row').addEventListener('click', () => this._addControlRow());
@@ -311,6 +357,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         this._updateCat(index, ev.detail.value);
       });
       this._formEls.push(form);
+      this._catForms.push(form);
 
       row.appendChild(form);
       row.appendChild(this._removeIconButton(() => this._removeCat(index)));
@@ -355,6 +402,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         this._updateInfoRow(index, ev.detail.value);
       });
       this._formEls.push(form);
+      this._infoForms.push(form);
 
       row.appendChild(form);
       row.appendChild(this._removeIconButton(() => this._removeInfoRow(index)));
@@ -383,6 +431,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _renderControlsRows() {
     const container = this.shadowRoot.getElementById('controls-rows');
     container.innerHTML = '';
+    this._controlForms = [];
     const rows = this._config.controls_row || [];
     rows.forEach((spec, index) => {
       const row = document.createElement('div');
@@ -399,6 +448,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         this._updateControlRow(index, ev.detail.value);
       });
       this._formEls.push(form);
+      this._controlForms.push(form);
 
       row.appendChild(form);
       row.appendChild(this._removeIconButton(() => this._removeControlRow(index)));
@@ -412,8 +462,14 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     controlsRow[index] = newSpec;
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
     // The action determines which sub-fields are shown; if it changed,
-    // re-render this section so the row's schema picks up the new fields.
-    if (newSpec.action !== prevAction) this._renderControlsRows();
+    // re-render this section so the row's schema picks up the new fields,
+    // and refresh the structure fingerprint so the dashboard host's echoed
+    // setConfig() (which will carry this same action) doesn't also trigger
+    // a redundant full-editor rebuild right behind this partial one.
+    if (newSpec.action !== prevAction) {
+      this._renderControlsRows();
+      this._lastStructureKey = this._structureKey(this._config);
+    }
   }
 
   _addControlRow() {
@@ -434,14 +490,19 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     // DOM type — its properties are set dynamically, hence the `any` cast.
     const form = /** @type {any} */ (document.createElement('ha-form'));
     form.schema = MAIN_SCHEMA;
-    form.data = this._flattenMain();
+    // Bound directly to the full config -- `ha-form` nests `device_entities`
+    // and reads/writes `alerts` (flattened) correctly on its own (see the
+    // class header comment). Keys outside MAIN_SCHEMA (cats/info_row/
+    // controls_row) round-trip untouched via ha-form's own data merge.
+    form.data = this._config;
     form.hass = this._hass;
     form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
     form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
       ev.stopPropagation();
-      this._onMainFormChanged(ev.detail.value);
+      this._fireConfigChanged(ev.detail.value);
     });
     this._formEls.push(form);
+    this._mainForm = form;
     container.appendChild(form);
   }
 }
