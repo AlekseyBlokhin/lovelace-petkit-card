@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/AlekseyBlokhin/lovelace-petkit-card/actions/workflows/ci.yml/badge.svg)](https://github.com/AlekseyBlokhin/lovelace-petkit-card/actions/workflows/ci.yml)
 [![HACS validation](https://github.com/AlekseyBlokhin/lovelace-petkit-card/actions/workflows/hacs-validate.yml/badge.svg)](https://github.com/AlekseyBlokhin/lovelace-petkit-card/actions/workflows/hacs-validate.yml)
-[![Open your Home Assistant instance and add this repository.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=AlekseyBlokhin&repository=lovelace-petkit-card&category=dashboard)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/AlekseyBlokhin/lovelace-petkit-card/blob/main/LICENSE)
 
 ## Table of Contents
@@ -40,12 +39,14 @@ sensors your PetKit integration already provides.
   from the device's `total_use`/`last_used_by` sensors — no per-cat helper
   entities needed. A visit the device itself couldn't identify a cat for
   plots as a neutral gray "Unknown" stem rather than being dropped.
-- A Working Records timeline: the device's own `last_event` history, shown
-  verbatim — the literal text PETKIT reported, not a computed
-  re-phrasing. No duration (that's in the chart/Usage line instead), and no
-  attempt to detect or reinterpret a "visit" row via pattern-matching.
-- Today / 3-day-avg / 7-day-avg per-cat analytics, with a decline/spike
-  warning banner.
+- A [Working Records](./docs/ARCHITECTURE.md#how-working-records-works)
+  timeline: the device's own `last_event` history, shown verbatim — the
+  literal text PETKIT reported, not a computed re-phrasing. No duration
+  (that's in the chart/Usage line instead), and no attempt to detect or
+  reinterpret a "visit" row via pattern-matching.
+- Today / 3-day-avg / 7-day-avg per-cat
+  [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work),
+  with a decline/spike warning banner.
 - A per-cat "no visit in N hours" alert banner (configurable, default 8h),
   independent of the decline banner's rolling-average comparison — it won't
   miss a gradual decline the way a percentage-vs-average check can, since
@@ -66,6 +67,8 @@ sensors your PetKit integration already provides.
 ## Installation
 
 ### Via HACS (custom repository)
+
+[![Open your Home Assistant instance and add this repository.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=AlekseyBlokhin&repository=lovelace-petkit-card&category=dashboard)
 
 This card isn't in the default HACS store yet, so add it as a custom
 repository (or use the one-click badge above):
@@ -123,12 +126,12 @@ or a full example at
 | `title` | no | string | `"PETKIT PURAMAX"` | Card header title. |
 | `device_entities` | yes | object | — | See [`device_entities`](#device_entities) below. |
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
-| `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from Working Records entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
-| `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for (`last_used_by` reporting PURAMAX's `unknown_pet` placeholder). Unrelated to Working Records, which never inspects visit identity. |
+| `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
+| `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for ([`device_entities.last_used_by`](#device_entities) reporting PURAMAX's `unknown_pet` placeholder). Unrelated to [Working Records](./docs/ARCHITECTURE.md#how-working-records-works), which never inspects visit identity. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See [`cats[]`](#cats) below. |
 | `info_row` | no | array | `[]` | Status chips, in order. See [`info_row[]`](#info_row) below. |
 | `controls_row` | no | array | `[]` | Buttons, in order. See [`controls_row[]`](#controls_row) below. |
-| `decline_threshold_pct` | no | number, 0-100 | `60` | Analytics warns when today's total is below this percent of the 7-day average (or symmetrically above `200 - this`). |
+| `decline_threshold_pct` | no | number, 0-100 | `60` | [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work) warns when today's total is below this percent of the 7-day average (or symmetrically above `200 - this`). |
 | `no_visit_alert_hours` | no | number, 1-168 | `8` | Shows a per-cat "hasn't used the litter box" banner once a cat's most recent visit is at least this many hours ago. An absolute check, not relative to history — won't drift the way a rolling-average comparison can. |
 | `notify_service` | no | entity id (`notify` domain) | — | If set, also calls this notify entity/service (once per overdue episode, not on every re-render) when a cat crosses `no_visit_alert_hours`. This only fires while the card is actually loaded in a browser/companion-app tab — for a guarantee independent of whether a dashboard is open, pair it with (or use instead) a native HA automation. |
 
@@ -148,7 +151,7 @@ One entry per cat.
 
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
-| `name` | yes | string | — | Display name. Must exactly match this cat's value as reported by `device_entities.last_used_by` — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
+| `name` | yes | string | — | Display name. Must exactly match this cat's value as reported by [`device_entities.last_used_by`](#device_entities) — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
 | `color` | yes | string (CSS color) | — | Chart/legend color for this cat. Picked via HA's native color selector in the visual editor. |
 
 Configuring more than one cat gives each their own chart stem color and
@@ -187,17 +190,19 @@ Buttons, in order.
 | `confirm` | no | string | — | If set, `press` shows a confirmation dialog with this text first. |
 | `start_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when not currently in maintenance mode. |
 | `exit_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when currently in maintenance mode. |
-| `state_entity` | no | entity id | `device_entities.state` | Overrides which entity `toggle_maintenance` reads to decide its current mode. |
+| `state_entity` | no | entity id | [`device_entities.state`](#device_entities) | Overrides which entity `toggle_maintenance` reads to decide its current mode. |
 
 `cats`, `info_row`, and `controls_row` all have a repeating-row visual
 editor (add/remove buttons); `value_map`, `event_labels`, and
 `event_exclude` are YAML-only since an arbitrary object/array has no clean
 `ha-form` widget.
 
-For the algorithm details behind the per-cat chart, Analytics, and Working
-Records — how visit duration/identity is reconstructed from raw sensor
-history, and why Working Records is deliberately never cross-referenced
-with that reconstruction — see [ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+For the algorithm details behind the per-cat chart and Analytics — how
+visit duration/identity is reconstructed from raw sensor history — see
+[How the chart, Usage line, and Analytics work](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work).
+For why Working Records is deliberately never cross-referenced with that
+reconstruction, see
+[How Working Records works](./docs/ARCHITECTURE.md#how-working-records-works).
 
 ## Supported devices
 
