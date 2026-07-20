@@ -22,11 +22,9 @@
 - [License](#license)
 
 A Home Assistant Lovelace custom card for PETKIT smart litter boxes: device
-status, controls, and per-cat visit analytics — computed entirely
-client-side from the device's own `total_use` and `last_used_by` sensor
-history. No helper entities and no companion automation are needed at all;
-the card reconstructs every visit's duration and cat identity straight from
-sensors your PetKit integration already provides.
+status, controls, and per-cat visit analytics — reconstructed entirely from
+sensors your existing PetKit integration already provides, with nothing
+extra to set up.
 
 ![The PETKIT PURAMAX card showing status chips, controls, the per-cat visit chart, Working Records, and Analytics](docs/media/card-overview.png)
 
@@ -35,15 +33,12 @@ sensors your PetKit integration already provides.
 - Device status chips and control buttons, both fully config-driven
   (`info_row` / `controls_row` arrays — add, remove, or reorder them purely
   in YAML, no code changes).
-- A day-switchable per-cat visit chart (a 0-24h "stem plot"), reconstructed
-  from the device's `total_use`/`last_used_by` sensors — no per-cat helper
-  entities needed. A visit the device itself couldn't identify a cat for
-  plots as a neutral gray "Unknown" stem rather than being dropped.
+- A day-switchable per-cat visit chart (a 0-24h "stem plot"). A visit the
+  device itself couldn't identify a cat for plots as a neutral gray
+  "Unknown" stem rather than being dropped.
 - A [Working Records](./docs/ARCHITECTURE.md#how-working-records-works)
-  timeline: the device's own `last_event` history, shown verbatim — the
-  literal text PETKIT reported, not a computed re-phrasing. No duration
-  (that's in the chart/Usage line instead), and no attempt to detect or
-  reinterpret a "visit" row via pattern-matching.
+  timeline — a verbatim log of the device's recent activity and
+  maintenance events, straight from PETKIT.
 - Today / 3-day-avg / 7-day-avg per-cat
   [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work),
   with a decline/spike warning banner.
@@ -52,17 +47,15 @@ sensors your PetKit integration already provides.
   miss a gradual decline the way a percentage-vs-average check can, since
   it's an absolute time check. Optionally pushes a notification too, via any
   `notify.*` entity you configure.
-- A real visual config editor (drag the card onto a dashboard and configure
-  it with forms — no YAML required to get started), built entirely from
-  Home Assistant's own native frontend elements (`ha-form`,
-  `ha-expansion-panel`, `ha-icon-button`, a real color-picker for cat
-  colors) so it looks and behaves like Home Assistant's own settings pages.
+- A real visual config editor — drag the card onto a dashboard and
+  configure it with forms, no YAML required to get started. It looks and
+  behaves just like Home Assistant's own settings pages, including a real
+  color-picker for cat colors.
 
 ## Prerequisites
 
 - **A PetKit Home Assistant integration**, already installed and configured, exposing your device's entities — either [`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit) or [`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit). This card only reads entities; it doesn't talk to PetKit's API itself, and doesn't care which of the two integrations provided them.
-- **No helper entities and no companion automation.** The card reads directly from your integration's own "total use" and (if you have more than one cat) "last used by" sensors.
-- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — built only on Home Assistant's own built-in frontend elements (`ha-form`, `ha-icon`, `ha-expansion-panel`, `ha-icon-button`), zero runtime npm dependencies (`package.json` has none). You don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
+- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — you don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
 
 ## Installation
 
@@ -194,8 +187,8 @@ Buttons, in order.
 
 `cats`, `info_row`, and `controls_row` all have a repeating-row visual
 editor (add/remove buttons); `value_map`, `event_labels`, and
-`event_exclude` are YAML-only since an arbitrary object/array has no clean
-`ha-form` widget.
+`event_exclude` are YAML-only, since the visual editor doesn't yet have a
+clean way to edit an arbitrary object there.
 
 For the algorithm details behind the per-cat chart and Analytics — how
 visit duration/identity is reconstructed from raw sensor history — see
