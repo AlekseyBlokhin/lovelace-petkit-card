@@ -127,6 +127,20 @@ describe('PetkitPuramaxCard: setConfig validation', () => {
     const card = makeCard();
     expect(() => card.setConfig(baseConfig())).not.toThrow();
   });
+
+  it('does not mutate a frozen config object (the real Lovelace host freezes it)', () => {
+    // Regression: setConfig() used to do `config.device_entities = ... || {}`
+    // directly on the incoming config to default a missing device_entities,
+    // which throws against a real (frozen) Lovelace config object -- plain
+    // mutable test objects don't catch this, only a frozen one does.
+    const card = makeCard();
+    const cfg = Object.freeze({
+      type: 'custom:petkit-puramax-card',
+      device_id: 'dev1',
+      cats: [{ name: 'A', color: '#fff' }],
+    });
+    expect(() => card.setConfig(cfg)).not.toThrow();
+  });
 });
 
 describe('PetkitPuramaxCard: getStubConfig', () => {

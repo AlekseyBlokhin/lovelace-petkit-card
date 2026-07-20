@@ -79,8 +79,11 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!config.device_id && !config.device_entities) {
       throw new Error('petkit-puramax-card: "device_entities" is required in config (or set "device_id")');
     }
-    config.device_entities = config.device_entities || {};
-    if (!config.device_id && !config.device_entities.total_use) {
+    // The real Lovelace host passes a frozen config object -- never mutate
+    // `config` itself (a plain-object stand-in in tests can mask this, but
+    // `config.device_entities = ...` throws for real against a frozen one).
+    const deviceEntities = config.device_entities || {};
+    if (!config.device_id && !deviceEntities.total_use) {
       throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config (or set "device_id")');
     }
     if (!config.cats) {
@@ -92,7 +95,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     // With a single cat, every visit is trivially theirs -- no need to know
     // which cat used the box, so last_used_by isn't required until there's
     // an actual ambiguity to resolve.
-    if (!config.device_id && config.cats.length > 1 && !config.device_entities.last_used_by) {
+    if (!config.device_id && config.cats.length > 1 && !deviceEntities.last_used_by) {
       throw new Error(
         'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured (or set "device_id")',
       );
@@ -106,7 +109,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       }
     });
 
-    this._config = config;
+    this._config = { ...config, device_entities: deviceEntities };
     this._dayOffset = 0;
     this._analytics = null;
     this._chartData = null;
