@@ -22,7 +22,14 @@ function baseConfig(overrides = {}) {
       { name: 'Cat B', color: '#222' },
     ],
     info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }],
-    controls_row: [{ name: 'Start', icon: 'mdi:play', action: 'press', entity: 'button.start' }],
+    controls_row: [
+      {
+        name: 'Start',
+        icon: 'mdi:play',
+        entity: 'button.start',
+        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start' } },
+      },
+    ],
     ...overrides,
   };
 }
@@ -92,13 +99,21 @@ describe('PetkitPuramaxCardEditor: Content section', () => {
     editor.setConfig(baseConfig());
   });
 
-  it('groups title/device_id/show_* under a "Content" group, first in the schema', () => {
+  it('puts device_id first, outside "Content" entirely', () => {
     const schema = mainForm(editor).schema;
-    expect(schema[0].name).toBe('content');
-    expect(schema[0].title).toBe('Content');
-    expect(schema[0].flatten).toBe(true);
-    const names = schema[0].schema.map((s) => s.name);
-    expect(names).toEqual(['title', 'device_id', 'show_state', 'show_history', 'show_working_records', 'show_analytics']);
+    expect(schema[0].name).toBe('device_id');
+    expect(schema[0].label).toBe('PetKit device');
+    expect(schema[0].selector).toEqual({ device: { filter: { integration: 'petkit' } } });
+    expect(schema[1].name).toBe('content');
+  });
+
+  it('groups title/show_* under a "Content" group, right after device_id', () => {
+    const schema = mainForm(editor).schema;
+    const contentGroup = schema.find((s) => s.name === 'content');
+    expect(contentGroup.title).toBe('Content');
+    expect(contentGroup.flatten).toBe(true);
+    expect(contentGroup.schema.find((s) => s.name === 'title')).toBeDefined();
+    expect(contentGroup.schema.find((s) => s.name === 'device_id')).toBeUndefined();
   });
 
   it('gives the Content group an mdi iconPath (native icon, not emoji)', () => {
@@ -107,17 +122,19 @@ describe('PetkitPuramaxCardEditor: Content section', () => {
     expect(contentGroup.iconPath.length).toBeGreaterThan(0);
   });
 
-  it('gives device_id a plain label with no explanatory subtitle, filtered to the petkit integration', () => {
+  it('groups the show_* toggles into their own grid (compact, not one full-width row each)', () => {
     const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
-    const deviceField = contentGroup.schema.find((s) => s.name === 'device_id');
-    expect(deviceField.label).toBe('PetKit device');
-    expect(deviceField.selector).toEqual({ device: { filter: { integration: 'petkit' } } });
+    const grid = contentGroup.schema.find((s) => s.type === 'grid');
+    expect(grid).toBeDefined();
+    const names = grid.schema.map((s) => s.name);
+    expect(names).toEqual(['show_state', 'show_history', 'show_working_records', 'show_analytics']);
   });
 
   it('exposes the show_* toggles as boolean selectors', () => {
     const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
+    const grid = contentGroup.schema.find((s) => s.type === 'grid');
     for (const name of ['show_state', 'show_history', 'show_working_records', 'show_analytics']) {
-      const field = contentGroup.schema.find((s) => s.name === name);
+      const field = grid.schema.find((s) => s.name === name);
       expect(field.selector).toEqual({ boolean: {} });
     }
   });
@@ -152,6 +169,11 @@ describe('PetkitPuramaxCardEditor: Content section', () => {
     expect(alertsGroup.flatten).toBe(true);
     expect(typeof alertsGroup.iconPath).toBe('string');
     expect(alertsGroup.iconPath.length).toBeGreaterThan(0);
+  });
+
+  it('does not expose unknown_cat_color in the visual editor (YAML-only)', () => {
+    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
+    expect(alertsGroup.schema.find((s) => s.name === 'unknown_cat_color')).toBeUndefined();
   });
 });
 
@@ -261,31 +283,57 @@ describe('PetkitPuramaxCardEditor: status chips / controls list view', () => {
     expect(addControlRowForm(editor).schema).toEqual([{ name: 'entity', label: 'Add a control', selector: { entity: {} } }]);
   });
 
-  it('picking an entity in the info_row add-picker appends a new summary row, auto-filling its icon from the entity', () => {
-    editor.hass = { states: { 'sensor.new_chip': { attributes: { icon: 'mdi:water-percent' } } } };
+  it('picking an entity in the info_row add-picker appends a row with ONLY entity set -- no name/icon baked in', () => {
+    editor.hass = { states: { 'sensor.new_chip': { attributes: { icon: 'mdi:water-percent', friendly_name: 'New chip' } } } };
     const listener = vi.fn();
     editor.addEventListener('config-changed', listener);
     fireValueChanged(addInfoRowForm(editor), { entity: 'sensor.new_chip' });
     const { config } = listener.mock.calls[0][0].detail;
-    expect(config.info_row[1]).toEqual({ entity: 'sensor.new_chip', name: '', icon: 'mdi:water-percent' });
+    expect(config.info_row[1]).toEqual({ entity: 'sensor.new_chip' });
   });
 
-  it('falls back to the generic default icon when the entity has none set', () => {
-    editor.hass = { states: { 'sensor.new_chip': { attributes: {} } } };
-    const listener = vi.fn();
-    editor.addEventListener('config-changed', listener);
-    fireValueChanged(addInfoRowForm(editor), { entity: 'sensor.new_chip' });
-    const { config } = listener.mock.calls[0][0].detail;
-    expect(config.info_row[1].icon).toBe('mdi:information-outline');
-  });
-
-  it('picking an entity in the controls_row add-picker appends a new "press" row, auto-filling its icon', () => {
+  it('picking an entity in the controls_row add-picker appends a row with ONLY entity set -- no name/icon/tap_action baked in', () => {
     editor.hass = { states: { 'button.new': { attributes: { icon: 'mdi:broom' } } } };
     const listener = vi.fn();
     editor.addEventListener('config-changed', listener);
     fireValueChanged(addControlRowForm(editor), { entity: 'button.new' });
     const { config } = listener.mock.calls[0][0].detail;
-    expect(config.controls_row[1]).toEqual({ entity: 'button.new', name: '', icon: 'mdi:broom', action: 'press' });
+    expect(config.controls_row[1]).toEqual({ entity: 'button.new' });
+  });
+
+  it("a summary row's icon is a live ha-state-icon bound to the entity's state, not a fixed default", () => {
+    editor.hass = { states: { 'sensor.consumable': { attributes: {} } } };
+    editor.setConfig(baseConfig());
+    const icon = /** @type {any} */ (infoRows(editor)[0].querySelector('ha-state-icon'));
+    expect(icon).not.toBeNull();
+    expect(icon.stateObj).toEqual({ attributes: {} });
+    expect(icon.icon).toBeUndefined();
+  });
+
+  it("an explicit spec.icon is passed to ha-state-icon as an override, alongside the live stateObj", () => {
+    editor.hass = { states: { 'sensor.consumable': { attributes: {} } } };
+    editor.setConfig(baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'Consumable', icon: 'mdi:custom' }] }));
+    const icon = /** @type {any} */ (infoRows(editor)[0].querySelector('ha-state-icon'));
+    expect(icon.icon).toBe('mdi:custom');
+  });
+
+  it("a summary row falls back to the entity's live friendly_name when no name is configured", () => {
+    editor.hass = { states: { 'sensor.consumable': { attributes: { friendly_name: 'Consumable remaining' } } } };
+    editor.setConfig(baseConfig({ info_row: [{ entity: 'sensor.consumable' }] }));
+    const primary = infoRows(editor)[0].querySelector('.summary-label-primary');
+    expect(primary.textContent).toBe('Consumable remaining');
+  });
+
+  it('shows a muted "Area → Device" secondary line when the entity registry has that context', () => {
+    editor.hass = {
+      states: { 'sensor.consumable': { attributes: {} } },
+      entities: { 'sensor.consumable': { entity_id: 'sensor.consumable', device_id: 'dev1', area_id: 'bathroom' } },
+      devices: { dev1: { id: 'dev1', name: 'PETKIT PURAMAX' } },
+      areas: { bathroom: { area_id: 'bathroom', name: 'Bathroom' } },
+    };
+    editor.setConfig(baseConfig({ info_row: [{ entity: 'sensor.consumable' }] }));
+    const secondary = infoRows(editor)[0].querySelector('.summary-label-secondary');
+    expect(secondary.textContent).toBe('Bathroom → PETKIT PURAMAX');
   });
 
   it('reorders status chips when the sortable list fires item-moved', () => {
@@ -309,8 +357,8 @@ describe('PetkitPuramaxCardEditor: status chips / controls list view', () => {
     editor.setConfig(
       baseConfig({
         controls_row: [
-          { name: 'A', action: 'press', entity: 'button.a' },
-          { name: 'B', action: 'press', entity: 'button.b' },
+          { name: 'A', entity: 'button.a', tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.a' } } },
+          { name: 'B', entity: 'button.b', tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.b' } } },
         ],
       }),
     );
@@ -322,15 +370,20 @@ describe('PetkitPuramaxCardEditor: status chips / controls list view', () => {
     expect(config.controls_row.map((r) => r.name)).toEqual(['B', 'A']);
   });
 
-  it('a toggle_maintenance row (no plain entity field) still shows a real summary label via start_entity', () => {
+  it("a control with a visibility condition (e.g. one half of a Start/Exit Maintenance pair) still renders a normal summary row", () => {
     editor.setConfig(
       baseConfig({
         controls_row: [
-          { name: '', icon: 'mdi:wrench', action: 'toggle_maintenance', start_entity: 'button.start', exit_entity: 'button.exit' },
+          {
+            name: 'Start Maintenance',
+            entity: 'button.maint_start',
+            tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_start' } },
+            visibility: [{ condition: 'state', entity: 'sensor.state', state_not: 'maintenance_mode' }],
+          },
         ],
       }),
     );
-    expect(controlsRows(editor)[0].querySelector('.summary-label').textContent).toBe('button.start');
+    expect(controlsRows(editor)[0].querySelector('.summary-label-primary').textContent).toBe('Start Maintenance');
   });
 
   it('removing a row via its icon button fires config-changed correctly', () => {
@@ -361,27 +414,34 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
     expect(detailForm(editor).data).toEqual(baseConfig().info_row[0]);
   });
 
-  it('clicking Edit on a control shows the action-appropriate full field set', () => {
+  it('clicking Edit on a control shows entity/name/icon plus the native tap/hold/double-tap action selectors', () => {
     click(controlsRows(editor)[0].querySelector('.edit-btn'));
     expect(editor.shadowRoot.querySelector('.detail-title').textContent).toBe('Edit control');
     const schema = detailForm(editor).schema;
-    expect(schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity', 'confirm']);
+    expect(schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'tap_action', 'hold_action', 'double_tap_action']);
+    expect(schema.find((s) => s.name === 'tap_action').selector).toEqual({ ui_action: {} });
   });
 
-  it('shows start/exit/state entity fields (no plain entity field) when editing a toggle_maintenance row', () => {
+  it("a control's visibility field (YAML-only) round-trips untouched through the sub-page, same as any other unlisted key", () => {
     editor.setConfig(
       baseConfig({
         controls_row: [
-          { name: 'M', icon: 'mdi:wrench', action: 'toggle_maintenance', start_entity: 'button.start', exit_entity: 'button.exit' },
+          {
+            name: 'Start Maintenance',
+            entity: 'button.maint_start',
+            tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_start' } },
+            visibility: [{ condition: 'state', entity: 'sensor.state', state_not: 'maintenance_mode' }],
+          },
         ],
       }),
     );
     click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const names = detailForm(editor).schema.map((s) => s.name);
-    expect(names).toContain('start_entity');
-    expect(names).toContain('exit_entity');
-    expect(names).toContain('state_entity');
-    expect(names).not.toContain('entity');
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    fireValueChanged(detailForm(editor), { ...editor._config.controls_row[0], name: 'Renamed' });
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.controls_row[0].visibility).toEqual([{ condition: 'state', entity: 'sensor.state', state_not: 'maintenance_mode' }]);
+    expect(config.controls_row[0].name).toBe('Renamed');
   });
 
   it('editing a field in the sub-page fires config-changed with the updated row', () => {
@@ -393,13 +453,13 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
     expect(config.info_row[0].name).toBe('Renamed chip');
   });
 
-  it('re-renders the sub-page with a new schema when a control\'s action field changes', () => {
+  it("editing a control's tap_action does not rebuild the sub-page (the schema is fixed, not action-dependent)", () => {
     click(controlsRows(editor)[0].querySelector('.edit-btn'));
     const before = detailForm(editor);
-    fireValueChanged(before, { name: 'Start', icon: 'mdi:play', action: 'toggle', entity: 'switch.a' });
+    fireValueChanged(before, { name: 'Start', icon: 'mdi:play', entity: 'switch.a', tap_action: { action: 'toggle' } });
     const after = detailForm(editor);
-    expect(after).not.toBe(before);
-    expect(after.schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity']);
+    expect(after).toBe(before);
+    expect(after.schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'tap_action', 'hold_action', 'double_tap_action']);
   });
 
   it('clicking the back button returns to the normal list view', () => {

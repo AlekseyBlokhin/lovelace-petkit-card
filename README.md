@@ -30,15 +30,21 @@ extra to set up.
 
 ## What it does
 
-- Device status chips and control buttons, both fully config-driven
-  (`info_row` / `controls_row` arrays — add, remove, or reorder them purely
-  in YAML, no code changes). Tapping a status chip opens that entity's
-  native Home Assistant more-info dialog, the same as tapping a built-in
-  badge or entity row.
+- Device status chips (top-right state badge included) and control
+  buttons, both fully config-driven (`info_row` / `controls_row` arrays —
+  add, remove, or reorder them purely in YAML, no code changes). A chip/
+  control with no `name`/`icon` set shows the entity's own live name/icon,
+  the same defaults a built-in card would use. Tapping a status chip opens
+  that entity's native Home Assistant more-info dialog; controls use the
+  same `tap_action`/`hold_action`/`double_tap_action` config every
+  built-in card's interactions do, and can be conditionally shown via a
+  native `visibility` condition (e.g. a Start/Exit Maintenance pair, each
+  visible only in one device state).
 - Point it at your PetKit device once (`device_id`, picked from a native
   device selector) and it auto-detects the sensors it needs from the
   device's own entity registry — no hunting down and typing in five entity
-  ids by hand.
+  ids by hand — plus a starter set of status chips and controls built from
+  whatever that device actually has.
 - A day-switchable per-cat visit chart (a 0-24h "stem plot"). A visit the
   device itself couldn't identify a cat for plots as a neutral gray
   "Unknown" stem rather than being dropped.
@@ -153,7 +159,7 @@ or a full example at
 | `device_entities` | one of `device_id`/`device_entities.total_use` required | object | — | See [`device_entities`](#device_entities) below. Optional (and acts only as an override on top of `device_id`'s auto-detection) once `device_id` is set. |
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
 | `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
-| `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for ([`device_entities.last_used_by`](#device_entities) reporting PURAMAX's `unknown_pet` placeholder). Unrelated to [Working Records](./docs/ARCHITECTURE.md#how-working-records-works), which never inspects visit identity. |
+| `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for ([`device_entities.last_used_by`](#device_entities) reporting PURAMAX's `unknown_pet` placeholder). Unrelated to [Working Records](./docs/ARCHITECTURE.md#how-working-records-works), which never inspects visit identity. YAML-only — no visual editor field. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See [`cats[]`](#cats) below. |
 | `info_row` | no | array | `[]` | Status chips, in order. See [`info_row[]`](#info_row) below. |
 | `controls_row` | no | array | `[]` | Buttons, in order. See [`controls_row[]`](#controls_row) below. |
@@ -199,8 +205,8 @@ Status chips, in order.
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `entity` | yes | entity id | — | Entity whose state is displayed. |
-| `name` | no | string | entity id | Chip label. |
-| `icon` | no | string (mdi icon) | `mdi:information-outline` | Chip icon. |
+| `name` | no | string | the entity's own friendly name | Chip label. Only ever an *override* — leave it unset to show the entity's own name, the same as any built-in card would. |
+| `icon` | no | string (mdi icon) | the entity's own icon | Chip icon. Only ever an *override* — leave it unset to show a live `ha-state-icon` resolved from the entity (registry override, its own `icon` attribute, or HA's domain-icon table), not a fixed generic icon. |
 | `unit` | no | string | — | Appended to the raw state, e.g. `%`. |
 | `value_map` | no | object (`{state: label}`) | — | Maps a raw state to a display string (takes precedence over `unit`). YAML-only — no visual editor field. |
 | `warn_below` | no | number | — | Chip renders in a "warn" style if the numeric state is below this. |
@@ -209,28 +215,36 @@ Status chips, in order.
 
 ### `controls_row[]`
 
-Buttons, in order.
+Buttons, in order. Uses the same interaction vocabulary as any built-in
+card (`tap_action`/`hold_action`/`double_tap_action`, the native
+[`ui_action` selector](https://www.home-assistant.io/dashboards/actions/))
+instead of a bespoke action list, so anything a built-in card's tap action
+can do — including calling any service with a native confirmation dialog —
+this card's controls can too.
 
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
-| `name` | no | string | — | Button label. |
-| `icon` | no | string (mdi icon) | `mdi:help` | Button icon. |
-| `action` | yes | `press` \| `toggle_maintenance` \| `toggle` \| `more_info` | — | What the button does. |
-| `entity` | action-dependent | entity id | — | Required for `press`, `toggle`, `more_info`. |
-| `confirm` | no | string | — | If set, `press` shows a confirmation dialog with this text first. |
-| `start_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when not currently in maintenance mode. |
-| `exit_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when currently in maintenance mode. |
-| `state_entity` | no | entity id | [`device_entities.state`](#device_entities) | Overrides which entity `toggle_maintenance` reads to decide its current mode. |
+| `entity` | yes | entity id | — | The control's primary entity: the toggle target for a `toggle` tap_action, what lights up the button when its state is `on`, and the fallback for `more-info`. |
+| `name` | no | string | the entity's own friendly name | Button label. Override only, same as `info_row.name`. |
+| `icon` | no | string (mdi icon) | the entity's own icon | Button icon. Override only, same as `info_row.icon`. |
+| `tap_action` | no | [action config](https://www.home-assistant.io/dashboards/actions/) | `{action: more-info}` on `entity` | What a tap does — `perform-action` (call any service, e.g. `button.press`), `toggle`, `navigate`, `url`, `more-info`, `none`, each with an optional native `confirmation: {text: ...}` dialog. |
+| `hold_action` | no | action config | — | What a press-and-hold does. |
+| `double_tap_action` | no | action config | — | What a double-tap does. |
+| `visibility` | no | array of [conditions](https://www.home-assistant.io/dashboards/cards/#card-and-badge-visibility) | always visible | Hides this control unless every condition passes (`state`/`numeric_state`/`and`/`or`/`not` — see [ARCHITECTURE.md](./docs/ARCHITECTURE.md)). YAML-only — no visual editor field yet. This is how a device with a "only makes sense in state X" pair of buttons (e.g. Start/Exit Maintenance) is expressed: two ordinary rows, each visible in exactly one state, that together read as a single control that changes what it shows. |
+
+Highlighting a toggle-style control (e.g. an "Auto cleaning" switch) so it
+visually looks "on" is automatic whenever the control's own `entity` state
+is `on` — no config needed for that part.
 
 `cats` has a repeating-row visual editor (drag to reorder, Delete button).
 `info_row`/`controls_row` follow the same pattern as the built-in Entities
 Card: pick an entity in the always-present picker at the bottom of the list
-to add a row (its icon is pre-filled from the entity when it has one), drag
-to reorder, and click a row's Edit (pencil) button to open a full-page
+to add a row (only `entity` is set — no name/icon/action baked in), drag to
+reorder, and click a row's Edit (pencil) button to open a full-page
 sub-editor for its other fields (Delete removes it directly from the list).
-`value_map`, `event_labels`, and `event_exclude` are YAML-only, since the
-visual editor doesn't yet have a clean way to edit an arbitrary object
-there.
+`value_map`, `event_labels`, `event_exclude`, `unknown_cat_color`, and
+`controls_row[].visibility` are YAML-only, since the visual editor doesn't
+yet have a clean widget for an arbitrary object/array there.
 
 For the algorithm details behind the per-cat chart and Analytics — how
 visit duration/identity is reconstructed from raw sensor history — see

@@ -1,55 +1,65 @@
 /**
  * Visual config editor for petkit-puramax-card.
  *
- * No new runtime dependency: this composes native Home Assistant frontend
- * elements (globally available by tag name, standard practice for custom
- * card editors — no import needed): `ha-form` for scalar fields,
- * `ha-expansion-panel`/`ha-svg-icon` for section headers (matching the
- * "Content"/"Features"/"Interactions" pattern native cards like Area Card
- * use), `ha-sortable` for drag-to-reorder, `ha-icon-button-prev` for the
- * sub-page back button, and `ha-icon-button`/`ha-icon` for row actions.
- *
- * The 5 `ICON_*` constants below are raw SVG path data copied from
- * `@mdi/js` (MIT) rather than taken on as an npm dependency, to keep this
- * project's zero-runtime-dependency build -- `ha-svg-icon`/`ha-form`'s
- * `iconPath` schema field both need a path string, not an `mdi:name`
- * string (unlike the plain `<ha-icon icon="mdi:...">` used elsewhere here).
+ * Composes native Home Assistant frontend elements (globally available by
+ * tag name, standard practice for custom card editors — no import needed):
+ * `ha-form` for scalar fields, `ha-expansion-panel`/`ha-svg-icon` for
+ * section headers (matching the "Content"/"Features"/"Interactions"
+ * pattern native cards like Area Card use), `ha-sortable` for
+ * drag-to-reorder, `ha-icon-button-prev` for the sub-page back button, and
+ * `ha-icon-button`/`ha-icon` for row actions. `@mdi/js` is this project's
+ * one real dependency (bundled at build time, so it costs nothing at
+ * runtime) -- `ha-svg-icon`/`ha-form`'s `iconPath` schema field both need
+ * real SVG path data, not an `mdi:name` string.
  *
  * `ha-form`'s `expandable` schema type DOES nest the bound data object by
  * default -- both "Content" and "Analytics & alerts" below use
- * `flatten: true` since their fields (title/device_id/show_*,
- * decline_threshold_pct/etc.) are real top-level config keys, only
- * visually grouped, not nested under `cfg.content`/`cfg.alerts`. The main
- * form binds directly to `this._config`, so keys outside MAIN_SCHEMA
- * (cats/info_row/controls_row/device_entities) round-trip untouched via
- * ha-form's own data merge.
+ * `flatten: true` since their fields (title/show_*, decline_threshold_pct/
+ * etc.) are real top-level config keys, only visually grouped, not nested
+ * under `cfg.content`/`cfg.alerts`. `device_id` sits outside "Content"
+ * entirely, as its own top-level field -- picking the device is the first
+ * decision a new card needs, not one more row inside a collapsed section.
+ * The main form binds directly to `this._config`, so keys outside
+ * MAIN_SCHEMA (cats/info_row/controls_row/device_entities/
+ * unknown_cat_color) round-trip untouched via ha-form's own data merge.
  *
  * info_row/controls_row follow the same pattern as HA's own Entities Card:
  * the list view shows a draggable icon+name summary per row (Edit/Delete
  * buttons, `ha-sortable` reorder) plus a persistent "add an entity" picker
  * at the bottom -- picking an entity there appends a new row directly (no
- * separate blank draft row). Clicking Edit doesn't expand the row inline;
- * it swaps the editor's entire visible content to a single full-field
- * sub-page with a back button (`_detailEditor`/`_renderDetail()`), the same
- * interaction shape as HA's real `hui-sub-element-editor` (Area Card
- * Features, Entities Card rows) -- that internal component isn't reliably
- * instantiable from a third-party card (it's lazily defined and its `type`
- * enum is fixed to HA's own built-in editors), so this replicates the
- * pattern with the same stable building block it itself uses
- * (`ha-icon-button-prev`) rather than the component itself.
+ * separate blank draft row, and no icon/name baked in -- both stay unset so
+ * the card resolves them live from the entity, exactly like leaving them
+ * unset in hand-written YAML would). Clicking Edit doesn't expand the row
+ * inline; it swaps the editor's entire visible content to a single
+ * full-field sub-page with a back button (`_detailEditor`/
+ * `_renderDetail()`), the same interaction shape as HA's real
+ * `hui-sub-element-editor` (Area Card Features, Entities Card rows) --
+ * that internal component isn't reliably instantiable from a third-party
+ * card (it's lazily defined and its `type` enum is fixed to HA's own
+ * built-in editors), so this replicates the pattern with the same stable
+ * building block it itself uses (`ha-icon-button-prev`) rather than the
+ * component itself.
+ *
+ * `controls_row`'s `tap_action`/`hold_action`/`double_tap_action` use the
+ * native `ui_action` selector (the same one every built-in card's
+ * interactions use) instead of a bespoke action enum -- `visibility`
+ * (native card/badge condition syntax: state/numeric_state/and/or/not, see
+ * `src/lib/visibility.js`) is what replaces the old special-cased
+ * `toggle_maintenance` action: two ordinary buttons, each visible only in
+ * one state, read by the user as a single control that changes what it
+ * shows. `visibility` itself is YAML-only for now (same reasoning as
+ * `value_map`/`event_labels`/`unknown_cat_color`: no clean `ha-form` widget
+ * for an arbitrary nested condition array yet).
  */
 
-// Raw @mdi/js path data -- see the class-level comment for why these are
-// inlined instead of an `@mdi/js` dependency.
-const ICON_CONTENT = 'M4,9H20V11H4V9M4,13H14V15H4V13Z'; // mdiTextShort
-const ICON_CATS =
-  'M8.35,3C9.53,2.83 10.78,4.12 11.14,5.9C11.5,7.67 10.85,9.25 9.67,9.43C8.5,9.61 7.24,8.32 6.87,6.54C6.5,4.77 7.17,3.19 8.35,3M15.5,3C16.69,3.19 17.35,4.77 17,6.54C16.62,8.32 15.37,9.61 14.19,9.43C13,9.25 12.35,7.67 12.72,5.9C13.08,4.12 14.33,2.83 15.5,3M3,7.6C4.14,7.11 5.69,8 6.5,9.55C7.26,11.13 7,12.79 5.87,13.28C4.74,13.77 3.2,12.89 2.41,11.32C1.62,9.75 1.9,8.08 3,7.6M21,7.6C22.1,8.08 22.38,9.75 21.59,11.32C20.8,12.89 19.26,13.77 18.13,13.28C17,12.79 16.74,11.13 17.5,9.55C18.31,8 19.86,7.11 21,7.6M19.33,18.38C19.37,19.32 18.65,20.36 17.79,20.75C16,21.57 13.88,19.87 11.89,19.87C9.9,19.87 7.76,21.64 6,20.75C5,20.26 4.31,18.96 4.44,17.88C4.62,16.39 6.41,15.59 7.47,14.5C8.88,13.09 9.88,10.44 11.89,10.44C13.89,10.44 14.95,13.05 16.3,14.5C17.41,15.72 19.26,16.75 19.33,18.38Z'; // mdiPaw
-const ICON_CHIPS =
-  'M3 11H11V3H3M5 5H9V9H5M13 21H21V13H13M15 15H19V19H15M3 21H11V13H3M5 15H9V19H5M13 3V11H21V3M19 9H15V5H19Z'; // mdiViewGridOutline
-const ICON_CONTROLS =
-  'M13 5C15.21 5 17 6.79 17 9C17 10.5 16.2 11.77 15 12.46V11.24C15.61 10.69 16 9.89 16 9C16 7.34 14.66 6 13 6S10 7.34 10 9C10 9.89 10.39 10.69 11 11.24V12.46C9.8 11.77 9 10.5 9 9C9 6.79 10.79 5 13 5M20 20.5C19.97 21.32 19.32 21.97 18.5 22H13C12.62 22 12.26 21.85 12 21.57L8 17.37L8.74 16.6C8.93 16.39 9.2 16.28 9.5 16.28H9.7L12 18V9C12 8.45 12.45 8 13 8S14 8.45 14 9V13.47L15.21 13.6L19.15 15.79C19.68 16.03 20 16.56 20 17.14V20.5M20 2H4C2.9 2 2 2.9 2 4V12C2 13.11 2.9 14 4 14H8V12L4 12L4 4H20L20 12H18V14H20V13.96L20.04 14C21.13 14 22 13.09 22 12V4C22 2.9 21.11 2 20 2Z'; // mdiGestureTapButton
-const ICON_ANALYTICS = 'M22,21H2V3H4V19H6V10H10V19H12V6H16V19H18V14H22V21Z'; // mdiChartBar
-const ICON_DRAG_HANDLE = 'M21 11H3V9H21V11M21 13H3V15H21V13Z'; // mdiDragHorizontalVariant
+import { mdiTextShort, mdiPaw, mdiViewGridOutline, mdiGestureTapButton, mdiChartBar, mdiDragHorizontalVariant } from '@mdi/js';
+
+const ICON_CONTENT = mdiTextShort;
+const ICON_CATS = mdiPaw;
+const ICON_CHIPS = mdiViewGridOutline;
+const ICON_CONTROLS = mdiGestureTapButton;
+const ICON_ANALYTICS = mdiChartBar;
+const ICON_DRAG_HANDLE = mdiDragHorizontalVariant;
 
 // `name` must exactly match this cat's value as reported by
 // `device_entities.last_used_by` (e.g. the PetKit integration's "Last used
@@ -71,60 +81,50 @@ const CAT_COLOR_SCHEMA = [{ name: 'color', label: 'Color', selector: { ui_color:
 // palette color like this resolves to real CSS at render time.
 const DEFAULT_NEW_CAT = { name: 'My Cat', color: 'blue' };
 
-const DEFAULT_INFO_ICON = 'mdi:information-outline';
-
 // `value_map` (mapping a raw entity state to a display string) has no clean
 // ha-form widget for an arbitrary object-of-strings, so it stays YAML-only
 // for v1 (documented in the README) and is intentionally left out here.
+//
+// `name`/`icon` are both optional overrides -- left unset, the card
+// resolves them live from the entity itself (its own friendly name / icon,
+// the same defaults any built-in card would show), so a fresh row never
+// bakes the entity_id in as a fake "name".
 const INFO_ROW_SCHEMA = [
   { name: 'entity', label: 'Entity', selector: { entity: {} } },
-  { name: 'name', label: 'Name', selector: { text: {} } },
-  { name: 'icon', label: 'Icon', selector: { icon: {} } },
+  { name: 'name', label: "Name (optional — overrides the entity's own name)", selector: { text: {} } },
+  { name: 'icon', label: "Icon (optional — overrides the entity's own icon)", selector: { icon: {} } },
   { name: 'unit', label: 'Unit', selector: { text: {} } },
   { name: 'warn_below', label: 'Warn below', selector: { number: { mode: 'box' } } },
   { name: 'warn_above', label: 'Warn above', selector: { number: { mode: 'box' } } },
   { name: 'warn_state', label: 'Warn state', selector: { text: {} } },
 ];
 
-const CONTROL_ACTIONS = ['press', 'toggle_maintenance', 'toggle', 'more_info'];
-
-const DEFAULT_CONTROL_ICON = 'mdi:gesture-tap-button';
-
-const CONTROLS_ROW_BASE_SCHEMA = [
-  { name: 'name', label: 'Name', selector: { text: {} } },
-  { name: 'icon', label: 'Icon', selector: { icon: {} } },
-  { name: 'action', label: 'Action', selector: { select: { options: CONTROL_ACTIONS, mode: 'dropdown' } } },
+// `tap_action`/`hold_action`/`double_tap_action` use the native `ui_action`
+// selector -- the same vocabulary (perform-action/toggle/navigate/url/
+// more-info/none, with a native `confirmation` dialog) every built-in
+// card's interactions use, instead of a bespoke `action` enum. There's no
+// more `toggle_maintenance`-style special case: a device with a
+// start/exit-button pair (or any other "only makes sense in state X" case)
+// is just two ordinary rows, each with its own `visibility` -- see the
+// class header comment and `src/lib/visibility.js`. `visibility` is
+// YAML-only for now (no clean `ha-form` widget yet for an arbitrary nested
+// condition array), so it isn't listed here, but it round-trips untouched
+// via the same "keys outside this schema pass through" behavior every
+// other YAML-only field already relies on.
+const CONTROLS_ROW_SCHEMA = [
+  { name: 'entity', label: 'Entity', selector: { entity: {} } },
+  { name: 'name', label: "Name (optional — overrides the entity's own name)", selector: { text: {} } },
+  { name: 'icon', label: "Icon (optional — overrides the entity's own icon)", selector: { icon: {} } },
+  { name: 'tap_action', label: 'Tap action', selector: { ui_action: {} } },
+  { name: 'hold_action', label: 'Hold action', selector: { ui_action: {} } },
+  { name: 'double_tap_action', label: 'Double-tap action', selector: { ui_action: {} } },
 ];
 
-// Only the sub-fields relevant to a row's current `action` are shown, so
-// picking e.g. "press" doesn't clutter the row with toggle_maintenance's
-// start/exit/state entity fields.
-const CONTROLS_ROW_ACTION_SCHEMA = {
-  press: [
-    { name: 'entity', label: 'Entity', selector: { entity: {} } },
-    { name: 'confirm', label: 'Confirm text (optional)', selector: { text: {} } },
-  ],
-  toggle: [{ name: 'entity', label: 'Entity', selector: { entity: {} } }],
-  more_info: [{ name: 'entity', label: 'Entity', selector: { entity: {} } }],
-  toggle_maintenance: [
-    { name: 'start_entity', label: 'Start entity', selector: { entity: { domain: 'button' } } },
-    { name: 'exit_entity', label: 'Exit entity', selector: { entity: { domain: 'button' } } },
-    { name: 'state_entity', label: 'State entity (optional)', selector: { entity: {} } },
-  ],
-};
-
-function controlsRowSchema(action) {
-  return [...CONTROLS_ROW_BASE_SCHEMA, ...(CONTROLS_ROW_ACTION_SCHEMA[action] || [])];
-}
-
-// `toggle_maintenance` has no plain `entity` field -- `start_entity` is its
-// primary target, so a row configured that way still counts as "set" and
-// is shown as a normal summary row rather than looking unconfigured.
-function controlPrimaryEntity(spec) {
-  return (spec && (spec.entity || spec.start_entity)) || '';
-}
-
 const MAIN_SCHEMA = [
+  // Outside "Content" entirely, and first -- which PetKit device this card
+  // is for is the first decision a new card needs, not one more row inside
+  // a section you have to expand first.
+  { name: 'device_id', label: 'PetKit device', selector: { device: { filter: { integration: 'petkit' } } } },
   {
     name: 'content',
     type: 'expandable',
@@ -135,11 +135,19 @@ const MAIN_SCHEMA = [
     iconPath: ICON_CONTENT,
     schema: [
       { name: 'title', label: 'Title', selector: { text: {} } },
-      { name: 'device_id', label: 'PetKit device', selector: { device: { filter: { integration: 'petkit' } } } },
-      { name: 'show_state', label: 'Show state', selector: { boolean: {} } },
-      { name: 'show_history', label: 'Show history (visit chart)', selector: { boolean: {} } },
-      { name: 'show_working_records', label: 'Show Working Records', selector: { boolean: {} } },
-      { name: 'show_analytics', label: 'Show Analytics', selector: { boolean: {} } },
+      {
+        // A nameless `grid` group is pure layout (no data-nesting effect,
+        // same as the cats name/color grid used to be) -- lays the 4
+        // toggles out 2-per-row instead of each taking a full-width row,
+        // which was a lot of dead vertical space for a plain on/off value.
+        type: 'grid',
+        schema: [
+          { name: 'show_state', label: 'Show state', selector: { boolean: {} } },
+          { name: 'show_history', label: 'Show history (visit chart)', selector: { boolean: {} } },
+          { name: 'show_working_records', label: 'Show Working Records', selector: { boolean: {} } },
+          { name: 'show_analytics', label: 'Show Analytics', selector: { boolean: {} } },
+        ],
+      },
     ],
   },
   {
@@ -164,11 +172,8 @@ const MAIN_SCHEMA = [
         label: 'Push a notification too (optional)',
         selector: { entity: { domain: 'notify' } },
       },
-      {
-        name: 'unknown_cat_color',
-        label: 'Unidentified-visit color (chart & analytics)',
-        selector: { ui_color: {} },
-      },
+      // unknown_cat_color is deliberately NOT here -- YAML-only (same
+      // reasoning as value_map/event_labels/event_exclude/device_entities).
     ],
   },
 ];
@@ -237,17 +242,16 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     );
   }
 
-  // Row counts (plus each controls_row entry's `action`, since that
-  // determines which sub-fields are visible) fingerprint whether the config
-  // changed *structurally*. A value-only edit keeps the same fingerprint --
-  // see `setConfig()`, which skips the full rebuild in that case so
-  // `ha-expansion-panel`s don't lose their open/closed state on every
-  // keystroke's round-trip through the dashboard host.
+  // Row counts fingerprint whether the config changed *structurally*. A
+  // value-only edit keeps the same fingerprint -- see `setConfig()`, which
+  // skips the full rebuild in that case so `ha-expansion-panel`s don't
+  // lose their open/closed state on every keystroke's round-trip through
+  // the dashboard host.
   _structureKey(config) {
     return JSON.stringify({
       cats: (config.cats || []).length,
       info_row: (config.info_row || []).length,
-      controls_row: (config.controls_row || []).map((c) => (c && c.action) || null),
+      controls_row: (config.controls_row || []).length,
     });
   }
 
@@ -285,23 +289,61 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       if (cats[i]) form.data = cats[i];
     });
     const infoRows = this._config.info_row || [];
-    (this._infoRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, infoRows[i], 'info'));
+    (this._infoRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, infoRows[i]));
     const controlsRows = this._config.controls_row || [];
-    (this._controlRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, controlsRows[i], 'control'));
+    (this._controlRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, controlsRows[i]));
   }
 
   // A summary row has no input to lose focus from, so it's always safe to
-  // just refresh its text/icon in place.
-  _refreshRowRef(ref, spec, kind) {
+  // just refresh its icon/label in place. info_row and controls_row rows
+  // are both entity-based now (no more per-kind fallback needed).
+  _refreshRowRef(ref, spec) {
     if (!ref || !spec) return;
-    if (ref.labelEl) ref.labelEl.textContent = this._summaryLabel(spec, kind);
-    if (ref.iconEl) ref.iconEl.setAttribute('icon', spec.icon || (kind === 'info' ? DEFAULT_INFO_ICON : DEFAULT_CONTROL_ICON));
+    if (ref.labelEl) this._fillSummaryLabel(ref.labelEl, spec);
+    if (ref.iconEl) {
+      ref.iconEl.icon = spec.icon || undefined;
+      ref.iconEl.stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : undefined;
+    }
   }
 
-  _summaryLabel(spec, kind) {
+  // Primary line: the configured name, else the entity's own live friendly
+  // name, else the bare entity id as a last resort. Secondary (muted) line:
+  // "Area → Device", the same context an entity picker's own selected-value
+  // chip shows -- so a row looks the same whether you're looking at the
+  // list view or its Edit sub-page's entity field.
+  _fillSummaryLabel(container, spec) {
+    container.innerHTML = '';
+    const primary = document.createElement('div');
+    primary.className = 'summary-label-primary';
+    primary.textContent = this._resolvedName(spec);
+    container.appendChild(primary);
+    const context = this._entityContext(spec.entity);
+    if (context) {
+      const secondary = document.createElement('div');
+      secondary.className = 'summary-label-secondary';
+      secondary.textContent = context;
+      container.appendChild(secondary);
+    }
+  }
+
+  _resolvedName(spec) {
     if (spec.name) return spec.name;
-    if (kind === 'info') return spec.entity || '';
-    return controlPrimaryEntity(spec) || spec.action || '';
+    const stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : null;
+    return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || spec.entity || '';
+  }
+
+  _entityContext(entityId) {
+    const hass = this._hass;
+    if (!hass || !entityId || !hass.entities) return null;
+    const entry = hass.entities[entityId];
+    if (!entry) return null;
+    const device = entry.device_id && hass.devices ? hass.devices[entry.device_id] : null;
+    const areaId = entry.area_id || (device && device.area_id);
+    const area = areaId && hass.areas ? hass.areas[areaId] : null;
+    const deviceName = device && (device.name_by_user || device.name);
+    const areaName = area && area.name;
+    if (areaName && deviceName) return `${areaName} → ${deviceName}`;
+    return areaName || deviceName || null;
   }
 
   _render() {
@@ -329,7 +371,7 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
       this._renderList();
       return;
     }
-    const schema = kind === 'info' ? INFO_ROW_SCHEMA : controlsRowSchema(spec.action);
+    const schema = kind === 'info' ? INFO_ROW_SCHEMA : CONTROLS_ROW_SCHEMA;
     const title = kind === 'info' ? 'Edit status chip' : 'Edit control';
     this.shadowRoot.innerHTML = `
       <style>
@@ -368,20 +410,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _updateRowAt(kind, index, newSpec) {
     const key = kind === 'info' ? 'info_row' : 'controls_row';
     const list = [...(this._config[key] || [])];
-    const prevAction = kind === 'control' ? list[index] && list[index].action : null;
     list[index] = newSpec;
     this._fireConfigChanged({ ...this._config, [key]: list });
-    // The action determines which sub-fields are shown; if it changed, the
-    // sub-page's own form needs a genuinely different schema right away
-    // (can't wait for the host's echoed setConfig(), which only pushes
-    // `.data` in place onto the existing form). Refresh the structure
-    // fingerprint too, so that echoed round-trip (carrying this same
-    // action) doesn't also trigger a redundant full-editor rebuild right
-    // behind this one.
-    if (kind === 'control' && newSpec.action !== prevAction) {
-      this._renderDetail();
-      this._lastStructureKey = this._structureKey(this._config);
-    }
   }
 
   // ---------- normal multi-section list view ----------
@@ -396,7 +426,14 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         .editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
-        ha-expansion-panel { --expansion-panel-summary-padding: 0 16px; border-radius: var(--ha-card-border-radius, 12px); }
+        /* No border-radius override here -- ha-form's own internal
+           "Content"/"Analytics & alerts" expandable groups render their
+           own ha-expansion-panel with HA's default corner radius; an
+           override on ONLY these editor-owned panels (Cats/Status chips/
+           Controls) can't reach inside ha-form's shadow DOM to match it,
+           so it's left at the native default everywhere for a consistent
+           look across all five sections. */
+        ha-expansion-panel { --expansion-panel-summary-padding: 0 16px; }
         ha-expansion-panel h3[slot="header"] { margin: 0; font-size: 1em; font-weight: 500; }
         ha-svg-icon[slot="leading-icon"] { color: var(--secondary-text-color); }
         .panel-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 16px; }
@@ -405,8 +442,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         .handle { display: flex; cursor: grab; color: var(--secondary-text-color); flex: 0 0 auto; touch-action: none; }
         .handle:active { cursor: grabbing; }
         .summary-row { padding: 0 4px; }
-        .summary-row ha-icon { color: var(--secondary-text-color); flex: 0 0 auto; }
-        .summary-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--primary-text-color); }
+        .summary-row ha-state-icon { color: var(--secondary-text-color); flex: 0 0 auto; }
+        .summary-label { flex: 1 1 auto; min-width: 0; }
+        .summary-label-primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--primary-text-color); }
+        .summary-label-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--secondary-text-color); font-size: 0.85em; }
         #cats-rows { display: flex; flex-direction: column; gap: 12px; }
         .cat-item { display: flex; flex-direction: column; gap: 4px; }
         #info-rows, #controls-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
@@ -605,7 +644,6 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     rows.forEach((spec, index) => {
       const { el, ref } = this._buildSummaryRow({
         spec,
-        kind: 'info',
         onEdit: () => this._openDetail('info', index),
         onRemove: () => this._removeInfoRow(index),
       });
@@ -620,8 +658,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._render();
   }
 
+  // No `name`/`icon` baked in -- left unset, exactly like hand-writing
+  // just `entity:` in YAML, so the card resolves both live from the entity.
   _addInfoRowFromEntity(entityId) {
-    const infoRow = [...(this._config.info_row || []), { entity: entityId, name: '', icon: this._defaultIconFor(entityId, DEFAULT_INFO_ICON) }];
+    const infoRow = [...(this._config.info_row || []), { entity: entityId }];
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
     this._render();
   }
@@ -648,7 +688,6 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     rows.forEach((spec, index) => {
       const { el, ref } = this._buildSummaryRow({
         spec,
-        kind: 'control',
         onEdit: () => this._openDetail('control', index),
         onRemove: () => this._removeControlRow(index),
       });
@@ -658,11 +697,11 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     container.appendChild(sortable);
   }
 
+  // No `name`/`icon`/`tap_action` baked in either -- an unset tap_action
+  // falls back to `more-info` (see src/lib/actions.js), the same default
+  // any entity gets when tapped with no explicit action configured.
   _addControlRowFromEntity(entityId) {
-    const controlsRow = [
-      ...(this._config.controls_row || []),
-      { entity: entityId, name: '', icon: this._defaultIconFor(entityId, DEFAULT_CONTROL_ICON), action: 'press' },
-    ];
+    const controlsRow = [...(this._config.controls_row || []), { entity: entityId }];
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
     this._render();
   }
@@ -680,25 +719,22 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._render();
   }
 
-  // Picking an entity in HA is the strongest, most universally-available
-  // signal for "what icon does this represent" -- most integrations set an
-  // explicit icon on their entities (PetKit's own entities do). Falls back
-  // to this section's generic default rather than leaving it unset, since
-  // the card itself falls back the same way if `icon` is ever missing.
-  _defaultIconFor(entityId, fallback) {
-    const stateObj = this._hass && this._hass.states && this._hass.states[entityId];
-    return (stateObj && stateObj.attributes && stateObj.attributes.icon) || fallback;
-  }
-
-  _buildSummaryRow({ spec, kind, onEdit, onRemove }) {
+  // Icon: a real `ha-state-icon` (not a fixed generic default) resolves the
+  // entity's own icon the same way any built-in card would -- registry
+  // override, `attributes.icon`, or HA's own domain-icon table -- unless
+  // `spec.icon` overrides it. Label: name/friendly_name/entity_id plus a
+  // muted "Area → Device" line, matching the entity picker's own
+  // selected-value chip (see `_fillSummaryLabel`).
+  _buildSummaryRow({ spec, onEdit, onRemove }) {
     const row = document.createElement('div');
     row.className = 'row summary-row';
     row.appendChild(this._dragHandle());
-    const icon = document.createElement('ha-icon');
-    icon.setAttribute('icon', spec.icon || (kind === 'info' ? DEFAULT_INFO_ICON : DEFAULT_CONTROL_ICON));
-    const label = document.createElement('span');
+    const icon = /** @type {any} */ (document.createElement('ha-state-icon'));
+    icon.icon = spec.icon || undefined;
+    icon.stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : undefined;
+    const label = document.createElement('div');
     label.className = 'summary-label';
-    label.textContent = this._summaryLabel(spec, kind);
+    this._fillSummaryLabel(label, spec);
     row.appendChild(icon);
     row.appendChild(label);
     row.appendChild(this._editIconButton(onEdit));

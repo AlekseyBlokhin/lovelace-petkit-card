@@ -4,9 +4,11 @@ import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNO
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
-import { getState, fireMoreInfo, callService, pressButton } from '../../lib/ha-helpers.js';
-import { resolveDeviceEntities } from '../../lib/device-entities.js';
+import { getState, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
+import { resolveDeviceEntities, resolveDefaultInfoRow, resolveDefaultControlsRow } from '../../lib/device-entities.js';
 import { resolveCssColor } from '../../lib/color.js';
+import { bindActionHandlers } from '../../lib/actions.js';
+import { checkConditionsMet } from '../../lib/visibility.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
@@ -52,14 +54,23 @@ export class PetkitPuramaxCard extends HTMLElement {
   // set up (matching the entity registry's own `platform: 'petkit'`, the
   // same signal `resolveDeviceEntities` keys off of), or left empty
   // otherwise; `_configError()` then explains what's still needed once the
-  // card actually mounts.
+  // card actually mounts. `info_row`/`controls_row` are similarly populated
+  // from whatever real entities that device has (a device without a Pura
+  // Air module, for instance, just gets fewer default chips) rather than
+  // hardcoded either.
   static getStubConfig(hass) {
     const petkitEntity =
       hass && hass.entities ? Object.values(hass.entities).find((e) => e.platform === 'petkit') : null;
+    const deviceId = petkitEntity ? petkitEntity.device_id : '';
+    const deviceEntities = resolveDeviceEntities(hass, deviceId);
+    const infoRow = resolveDefaultInfoRow(hass, deviceId);
+    const controlsRow = resolveDefaultControlsRow(hass, deviceId, deviceEntities.state);
     return {
       type: 'custom:petkit-puramax-card',
       title: 'PETKIT PURAMAX',
-      device_id: petkitEntity ? petkitEntity.device_id : '',
+      device_id: deviceId,
+      ...(infoRow.length ? { info_row: infoRow } : {}),
+      ...(controlsRow.length ? { controls_row: controlsRow } : {}),
       cats: [
         {
           name: 'My Cat',
@@ -541,6 +552,7 @@ export class PetkitPuramaxCard extends HTMLElement {
         ...infoRow.map((spec) => this._renderInfoChip(spec)),
         hasError ? this._chip('mdi:alert', 'Error', errorState.replace(/_/g, ' '), true, de.error) : '',
       ].join('');
+      this._bindStateIcons(statusRow);
       if (!statusRow.dataset.bound) {
         statusRow.dataset.bound = '1';
         // Delegated (not per-chip) so it survives `statusRow.innerHTML` being
@@ -559,74 +571,98 @@ export class PetkitPuramaxCard extends HTMLElement {
       }
     }
 
-    // controls row: fully config-driven — add/remove/reorder buttons via `controls_row` in YAML
+    // controls row: fully config-driven — add/remove/reorder buttons via
+    // `controls_row` in YAML. Re-evaluated on every live update (not built
+    // once) since `visibility` can change which controls are currently
+    // shown as device state changes (e.g. a "Start maintenance"/"Exit
+    // maintenance" pair) -- but the DOM/click-handler rebuild only actually
+    // happens when the *visible set* changes, not on every tick.
     const controlsRow = this.shadowRoot.getElementById('controls-row');
-    if (controlsRow && !controlsRow.dataset.bound) {
+    if (controlsRow) {
       const controls = cfg.controls_row || [];
-      controlsRow.innerHTML = controls
-        .map(
-          (spec, i) => `
-      <ha-control-button class="ctrl-btn" id="ctrl-${i}" label="${escapeHtml(spec.name || '')}">
+      const visible = controls.map((spec, i) => ({ spec, i })).filter(({ spec }) => checkConditionsMet(spec.visibility, this._hass));
+      const visKey = visible.map((v) => v.i).join(',');
+      if (controlsRow.dataset.visKey !== visKey) {
+        controlsRow.dataset.visKey = visKey;
+        controlsRow.innerHTML = visible
+          .map(
+            ({ spec, i }) => `
+      <ha-control-button class="ctrl-btn" id="ctrl-${i}" label="${escapeHtml(this._entityLabel(spec.name, spec.entity))}">
         <div class="ctrl-btn-content">
-          <ha-icon icon="${escapeHtml(spec.icon || 'mdi:help')}"></ha-icon>
-          <span>${escapeHtml(spec.name || '')}</span>
+          ${this._iconMarkup(spec.icon, spec.entity)}
+          <span>${escapeHtml(this._entityLabel(spec.name, spec.entity))}</span>
         </div>
       </ha-control-button>
     `,
-        )
-        .join('');
-      controlsRow.dataset.bound = '1';
-      controls.forEach((spec, i) => {
-        this.shadowRoot.getElementById(`ctrl-${i}`).addEventListener('click', () => this._runControlAction(spec));
+          )
+          .join('');
+        this._bindStateIcons(controlsRow);
+        visible.forEach(({ spec, i }) => {
+          const btn = this.shadowRoot.getElementById(`ctrl-${i}`);
+          bindActionHandlers(btn, () => ({
+            hass: this._hass,
+            tapAction: spec.tap_action,
+            holdAction: spec.hold_action,
+            doubleTapAction: spec.double_tap_action,
+            fallbackEntity: spec.entity,
+          }));
+        });
+      }
+      // Highlights a toggle-style control (e.g. "Auto cleaning") whenever
+      // its own entity is currently "on" -- cheap enough to refresh every
+      // tick regardless of whether the visible set above just rebuilt.
+      visible.forEach(({ spec, i }) => {
+        const btn = this.shadowRoot.getElementById(`ctrl-${i}`);
+        if (btn) btn.classList.toggle('ctrl-btn-active', this._s(spec.entity, null) === 'on');
       });
     }
+  }
+
+  // Resolves the icon/name a chip or control shows when its config leaves
+  // `icon`/`name` unset: the entity's own current icon/friendly name,
+  // never baked into config -- `icon`/`name` in config only ever override.
+
+  // A real `<ha-state-icon>` (bound to the live state object just below via
+  // `_bindStateIcons`) when no explicit icon is configured -- it resolves
+  // the entity's own icon (registry override, `attributes.icon`, or HA's
+  // domain-icon table) the same way any built-in card would, instead of
+  // this card guessing a single generic fallback for every entity domain.
+  _iconMarkup(icon, entityId) {
+    if (icon) return `<ha-icon icon="${escapeHtml(icon)}"></ha-icon>`;
+    if (entityId) return `<ha-state-icon data-icon-entity="${escapeHtml(entityId)}"></ha-state-icon>`;
+    return '<ha-icon icon="mdi:information-outline"></ha-icon>';
+  }
+
+  // `.stateObj` is a live object reference, not settable via the innerHTML
+  // string `_iconMarkup` returns -- bind it in a pass over the container
+  // right after every innerHTML rebuild.
+  _bindStateIcons(container) {
+    container.querySelectorAll('ha-state-icon[data-icon-entity]').forEach((el) => {
+      /** @type {any} */ (el).stateObj = this._hass && this._hass.states ? this._hass.states[el.dataset.iconEntity] : undefined;
+    });
+  }
+
+  _entityLabel(name, entityId) {
+    if (name) return name;
+    const stateObj = this._hass && this._hass.states ? this._hass.states[entityId] : null;
+    return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || entityId || '';
   }
 
   _renderInfoChip(spec) {
     const rawValue = this._s(spec.entity, null);
     const { display, warn } = computeChipDisplay(spec, rawValue);
-    return this._chip(spec.icon || 'mdi:information-outline', spec.name || spec.entity, display, warn, spec.entity);
-  }
-
-  _runControlAction(spec) {
-    switch (spec.action) {
-      case 'press': {
-        if (spec.confirm) {
-          if (window.confirm(spec.confirm)) pressButton(this._hass, spec.entity);
-        } else {
-          pressButton(this._hass, spec.entity);
-        }
-        break;
-      }
-      case 'toggle_maintenance': {
-        const stateEntity = spec.state_entity || this._deviceEntities.state;
-        const state = this._s(stateEntity, '');
-        if (state === 'maintenance') pressButton(this._hass, spec.exit_entity);
-        else pressButton(this._hass, spec.start_entity);
-        break;
-      }
-      case 'toggle': {
-        callService(this._hass, 'homeassistant', 'toggle', { entity_id: spec.entity });
-        break;
-      }
-      case 'more_info': {
-        fireMoreInfo(this, spec.entity);
-        break;
-      }
-      default:
-        break;
-    }
+    return this._chip(spec.icon, this._entityLabel(spec.name, spec.entity), display, warn, spec.entity);
   }
 
   _chip(icon, label, value, warn, entityId) {
-    // icon/label are config-provided, value is often a live entity state --
-    // escape all three, since none are guaranteed free of HTML metacharacters.
+    // label/value are often a live entity state/name -- escape both, since
+    // neither is guaranteed free of HTML metacharacters.
     // Tappable (opens the entity's native more-info dialog, like a built-in
     // badge/entity row) whenever it's backed by a real entity.
     const tapAttrs = entityId ? ` data-entity="${escapeHtml(entityId)}" tabindex="0"` : '';
     return `
       <div class="chip ${warn ? 'warn' : ''} ${entityId ? 'tappable' : ''}"${tapAttrs}>
-        <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
+        ${this._iconMarkup(icon, entityId)}
         <div class="chip-text"><div class="chip-label">${escapeHtml(label)}</div><div class="chip-value">${escapeHtml(value)}</div></div>
       </div>`;
   }

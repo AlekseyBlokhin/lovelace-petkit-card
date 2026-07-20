@@ -41,3 +41,108 @@ export function resolveDeviceEntities(hass, deviceId) {
 
   return resolved;
 }
+
+function findByTranslationKey(hass, deviceId, translationKey) {
+  if (!deviceId || !hass || !hass.entities) return undefined;
+  return Object.values(hass.entities).find((entity) => entity.device_id === deviceId && entity.translation_key === translationKey);
+}
+
+// A reasonable default set of status chips for a brand-new card -- verified
+// against this card's own live RobertD502-integration test device (not
+// confirmed against Jezza34000, which may use different translation_keys
+// for these, same caveat as `resolveDeviceEntities`). Only `entity` is set
+// (no `name`): the card resolves each chip's own display name live from the
+// entity's friendly_name, exactly like a manually-added chip does.
+const DEFAULT_INFO_ROW_KEYS = ['wastebin', 'litter_weight', 'times_used', 'pura_air_battery'];
+
+/**
+ * @param {any} hass
+ * @param {string} [deviceId]
+ * @returns {Array<{entity: string}>}
+ */
+export function resolveDefaultInfoRow(hass, deviceId) {
+  const rows = [];
+  for (const key of DEFAULT_INFO_ROW_KEYS) {
+    const match = findByTranslationKey(hass, deviceId, key);
+    if (match) rows.push({ entity: match.entity_id });
+  }
+  return rows;
+}
+
+/**
+ * A reasonable default control set for a brand-new card: Clean Now/Pause
+ * Cleaning and Start/Exit Maintenance are each a visibility-gated pair (see
+ * `src/lib/visibility.js`) rather than one button with special-cased
+ * behavior -- only visible while `stateEntityId` is available to gate on,
+ * since without it there'd be no way to tell the two apart and both would
+ * show at once. State values (`cleaning_litter_box`/`maintenance_mode`)
+ * verified live against this card's own RobertD502-integration test
+ * device's actual history, not guessed.
+ *
+ * @param {any} hass
+ * @param {string} [deviceId]
+ * @param {string} [stateEntityId]
+ * @returns {Array<object>}
+ */
+export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
+  const rows = [];
+  const pressAction = (entityId) => ({
+    action: 'perform-action',
+    perform_action: 'button.press',
+    target: { entity_id: entityId },
+  });
+
+  const cleanStart = findByTranslationKey(hass, deviceId, 'start_cleaning');
+  const cleanPause = findByTranslationKey(hass, deviceId, 'pause_cleaning');
+  if (cleanStart) {
+    rows.push({
+      entity: cleanStart.entity_id,
+      name: 'Clean Now',
+      tap_action: pressAction(cleanStart.entity_id),
+      ...(cleanPause && stateEntityId
+        ? { visibility: [{ condition: 'state', entity: stateEntityId, state_not: 'cleaning_litter_box' }] }
+        : {}),
+    });
+  }
+  if (cleanPause && stateEntityId) {
+    rows.push({
+      entity: cleanPause.entity_id,
+      name: 'Pause Cleaning',
+      tap_action: pressAction(cleanPause.entity_id),
+      visibility: [{ condition: 'state', entity: stateEntityId, state: 'cleaning_litter_box' }],
+    });
+  }
+
+  const maintStart = findByTranslationKey(hass, deviceId, 'start_maintenance');
+  const maintExit = findByTranslationKey(hass, deviceId, 'exit_maintenance');
+  if (maintStart) {
+    rows.push({
+      entity: maintStart.entity_id,
+      name: 'Start Maintenance',
+      tap_action: pressAction(maintStart.entity_id),
+      ...(maintExit && stateEntityId
+        ? { visibility: [{ condition: 'state', entity: stateEntityId, state_not: 'maintenance_mode' }] }
+        : {}),
+    });
+  }
+  if (maintExit && stateEntityId) {
+    rows.push({
+      entity: maintExit.entity_id,
+      name: 'Exit Maintenance',
+      tap_action: pressAction(maintExit.entity_id),
+      visibility: [{ condition: 'state', entity: stateEntityId, state: 'maintenance_mode' }],
+    });
+  }
+
+  const dumpLitter = findByTranslationKey(hass, deviceId, 'dump_litter');
+  if (dumpLitter) {
+    rows.push({ entity: dumpLitter.entity_id, name: 'Dump Litter', tap_action: pressAction(dumpLitter.entity_id) });
+  }
+
+  const autoCleaning = findByTranslationKey(hass, deviceId, 'auto_cleaning');
+  if (autoCleaning) {
+    rows.push({ entity: autoCleaning.entity_id, name: 'Auto cleaning', tap_action: { action: 'toggle' } });
+  }
+
+  return rows;
+}

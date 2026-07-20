@@ -355,6 +355,67 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(warnChips[0].querySelector('.chip-value').textContent).toBe('"><b>pwned</b>');
   });
 
+  it('falls back to the entity\'s friendly_name (not the raw entity_id) for a chip with no configured name', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80', attributes: { friendly_name: 'Consumable remaining' } },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip-label').textContent).toBe('Consumable remaining');
+  });
+
+  it('an explicit name still overrides the entity\'s friendly_name', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'My Chip' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80', attributes: { friendly_name: 'Consumable remaining' } },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip-label').textContent).toBe('My Chip');
+  });
+
+  it('renders a live ha-state-icon (not a fixed generic icon) for a chip with no configured icon', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80', attributes: {} },
+    });
+    await flush();
+    const stateIcon = card.shadowRoot.querySelector('.chip ha-state-icon');
+    expect(stateIcon).not.toBeNull();
+    expect(/** @type {any} */ (stateIcon).stateObj).toEqual({ state: '80', attributes: {} });
+    expect(card.shadowRoot.querySelector('.chip ha-icon')).toBeNull();
+  });
+
+  it('an explicit icon still overrides the live entity icon (plain ha-icon, not ha-state-icon)', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', icon: 'mdi:custom' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80', attributes: { icon: 'mdi:from-entity' } },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip ha-icon').getAttribute('icon')).toBe('mdi:custom');
+    expect(card.shadowRoot.querySelector('.chip ha-state-icon')).toBeNull();
+  });
+
+  it('a control with no configured name/icon falls back to the entity\'s friendly_name and a live ha-state-icon', async () => {
+    const cfg = baseConfig({ controls_row: [{ entity: 'switch.auto_clean', tap_action: { action: 'toggle' } }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'switch.auto_clean': { state: 'off', attributes: { friendly_name: 'Auto cleaning' } },
+    });
+    await flush();
+    const btn = card.shadowRoot.getElementById('ctrl-0');
+    expect(btn.getAttribute('label')).toBe('Auto cleaning');
+    expect(btn.querySelector('ha-state-icon')).not.toBeNull();
+  });
+
   it('dispatches hass-more-info when a status chip is clicked', async () => {
     const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }] });
     card.setConfig(cfg);
@@ -408,12 +469,12 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it('renders one button per controls_row entry', async () => {
+  it('renders one button per visible controls_row entry', async () => {
     const cfg = baseConfig({
       controls_row: [
-        { name: 'Start', icon: 'mdi:play', action: 'press', entity: 'button.start' },
-        { name: 'Stop', icon: 'mdi:stop', action: 'press', entity: 'button.stop' },
-        { name: 'Toggle', icon: 'mdi:toggle-switch', action: 'toggle', entity: 'switch.x' },
+        { name: 'Start', icon: 'mdi:play', entity: 'button.start', tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start' } } },
+        { name: 'Stop', icon: 'mdi:stop', entity: 'button.stop', tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.stop' } } },
+        { name: 'Toggle', icon: 'mdi:toggle-switch', entity: 'switch.x', tap_action: { action: 'toggle' } },
       ],
     });
     card.setConfig(cfg);
@@ -423,35 +484,64 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(buttons.length).toBe(3);
   });
 
-  it('calls button.press via hass.callService when a "press" control is clicked', async () => {
+  it('a perform-action tap_action calls hass.callService with the domain/service split from perform_action', async () => {
     const cfg = baseConfig({
-      controls_row: [{ name: 'Start', icon: 'mdi:play', action: 'press', entity: 'button.start_clean' }],
+      controls_row: [
+        {
+          name: 'Start',
+          icon: 'mdi:play',
+          entity: 'button.start_clean',
+          tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start_clean' } },
+        },
+      ],
     });
     card.setConfig(cfg);
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     card.hass = hass;
     await flush();
     const btn = card.shadowRoot.getElementById('ctrl-0');
+    btn.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     btn.dispatchEvent(new Event('click', { bubbles: true }));
     expect(hass.callService).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.start_clean' });
   });
 
-  it('calls homeassistant.toggle via hass.callService when a "toggle" control is clicked', async () => {
+  it('a toggle tap_action calls homeassistant.toggle on the control\'s entity', async () => {
     const cfg = baseConfig({
-      controls_row: [{ name: 'Fan', icon: 'mdi:fan', action: 'toggle', entity: 'switch.fan' }],
+      controls_row: [{ name: 'Fan', icon: 'mdi:fan', entity: 'switch.fan', tap_action: { action: 'toggle' } }],
     });
     card.setConfig(cfg);
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     card.hass = hass;
     await flush();
     const btn = card.shadowRoot.getElementById('ctrl-0');
+    btn.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     btn.dispatchEvent(new Event('click', { bubbles: true }));
     expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.fan' });
   });
 
-  it('dispatches hass-more-info when a "more_info" control is clicked', async () => {
+  it('highlights a toggle-style control (ctrl-btn-active) whenever its entity is currently "on"', async () => {
     const cfg = baseConfig({
-      controls_row: [{ name: 'Details', icon: 'mdi:info', action: 'more_info', entity: 'sensor.detail' }],
+      controls_row: [{ name: 'Auto cleaning', entity: 'switch.auto_clean', tap_action: { action: 'toggle' } }],
+    });
+    card.setConfig(cfg);
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' }, 'switch.auto_clean': { state: 'on' } });
+    await flush();
+    expect(card.shadowRoot.getElementById('ctrl-0').classList.contains('ctrl-btn-active')).toBe(true);
+  });
+
+  it('does not highlight a control whose entity is "off"', async () => {
+    const cfg = baseConfig({
+      controls_row: [{ name: 'Auto cleaning', entity: 'switch.auto_clean', tap_action: { action: 'toggle' } }],
+    });
+    card.setConfig(cfg);
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' }, 'switch.auto_clean': { state: 'off' } });
+    await flush();
+    expect(card.shadowRoot.getElementById('ctrl-0').classList.contains('ctrl-btn-active')).toBe(false);
+  });
+
+  it('dispatches hass-more-info when a more-info tap_action control is clicked', async () => {
+    const cfg = baseConfig({
+      controls_row: [{ name: 'Details', icon: 'mdi:info', entity: 'sensor.detail', tap_action: { action: 'more-info' } }],
     });
     card.setConfig(cfg);
     card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
@@ -459,20 +549,26 @@ describe('PetkitPuramaxCard: rendering', () => {
     const listener = vi.fn();
     card.addEventListener('hass-more-info', listener);
     const btn = card.shadowRoot.getElementById('ctrl-0');
+    btn.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     btn.dispatchEvent(new Event('click', { bubbles: true }));
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener.mock.calls[0][0].detail).toEqual({ entityId: 'sensor.detail' });
   });
 
-  it('toggle_maintenance presses exit_entity when device state is "maintenance"', async () => {
+  it('a visibility-gated "Exit Maintenance" control shows only while the device is in maintenance', async () => {
     const cfg = baseConfig({
       controls_row: [
         {
-          name: 'Maintenance',
-          icon: 'mdi:wrench',
-          action: 'toggle_maintenance',
-          start_entity: 'button.maint_start',
-          exit_entity: 'button.maint_exit',
+          name: 'Start Maintenance',
+          entity: 'button.maint_start',
+          tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_start' } },
+          visibility: [{ condition: 'state', entity: 'sensor.test_petkit_state', state_not: 'maintenance' }],
+        },
+        {
+          name: 'Exit Maintenance',
+          entity: 'button.maint_exit',
+          tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_exit' } },
+          visibility: [{ condition: 'state', entity: 'sensor.test_petkit_state', state: 'maintenance' }],
         },
       ],
     });
@@ -483,31 +579,46 @@ describe('PetkitPuramaxCard: rendering', () => {
     });
     card.hass = hass;
     await flush();
-    card.shadowRoot.getElementById('ctrl-0').dispatchEvent(new Event('click', { bubbles: true }));
+    const buttons = card.shadowRoot.querySelectorAll('.ctrl-btn');
+    expect(buttons.length).toBe(1);
+    expect(buttons[0].getAttribute('label')).toBe('Exit Maintenance');
+    buttons[0].dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    buttons[0].dispatchEvent(new Event('click', { bubbles: true }));
     expect(hass.callService).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.maint_exit' });
   });
 
-  it('toggle_maintenance presses start_entity when device state is not "maintenance"', async () => {
+  it('the visible control set updates live when the gating entity state changes', async () => {
     const cfg = baseConfig({
       controls_row: [
         {
-          name: 'Maintenance',
-          icon: 'mdi:wrench',
-          action: 'toggle_maintenance',
-          start_entity: 'button.maint_start',
-          exit_entity: 'button.maint_exit',
+          name: 'Start Maintenance',
+          entity: 'button.maint_start',
+          tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_start' } },
+          visibility: [{ condition: 'state', entity: 'sensor.test_petkit_state', state_not: 'maintenance' }],
+        },
+        {
+          name: 'Exit Maintenance',
+          entity: 'button.maint_exit',
+          tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.maint_exit' } },
+          visibility: [{ condition: 'state', entity: 'sensor.test_petkit_state', state: 'maintenance' }],
         },
       ],
     });
     card.setConfig(cfg);
-    const hass = makeHass({
+    card.hass = makeHass({
       'sensor.test_petkit_error': { state: 'no_error' },
       'sensor.test_petkit_state': { state: 'idle' },
     });
-    card.hass = hass;
     await flush();
-    card.shadowRoot.getElementById('ctrl-0').dispatchEvent(new Event('click', { bubbles: true }));
-    expect(hass.callService).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.maint_start' });
+    expect(card.shadowRoot.querySelector('.ctrl-btn').getAttribute('label')).toBe('Start Maintenance');
+
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.test_petkit_state': { state: 'maintenance' },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelectorAll('.ctrl-btn').length).toBe(1);
+    expect(card.shadowRoot.querySelector('.ctrl-btn').getAttribute('label')).toBe('Exit Maintenance');
   });
 
   it('shows the configured title, defaulting to "PETKIT PURAMAX"', async () => {
@@ -1281,8 +1392,28 @@ describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', 
 describe('regression: no hardcoded entity ids in logic/rendering source', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const srcDir = path.resolve(here, '../../src');
-  const ENTITY_ID_PATTERN =
-    /\b(input_number|input_boolean|input_text|sensor|binary_sensor|switch|button|light|climate|cover|fan|media_player|vacuum|remote|select|number|counter|automation|script|scene|weather|person|device_tracker)\.[a-z0-9_]+\b/;
+  const ENTITY_ID_PATTERN_SOURCE =
+    '\\b(input_number|input_boolean|input_text|sensor|binary_sensor|switch|button|light|climate|cover|fan|media_player|vacuum|remote|select|number|counter|automation|script|scene|weather|person|device_tracker)\\.[a-z0-9_]+\\b';
+  const ENTITY_ID_PATTERN = new RegExp(ENTITY_ID_PATTERN_SOURCE);
+
+  // The pattern above can't distinguish "domain.object_id" (a real, per-
+  // instance entity id -- what this check is actually for) from
+  // "domain.service_name" (a generic HA service-call identifier, the same
+  // for every installation, e.g. inside a `perform_action` value) -- both
+  // happen to share the same dotted-lowercase shape. `button.press` is the
+  // one known collision in this codebase (src/lib/device-entities.js's
+  // default controls_row, calling the button domain's generic press
+  // service) -- explicitly allowed here rather than weakening the pattern
+  // itself, which would blind this check to a real hardcoded button.* id.
+  // Uses its own fresh global-flag RegExp instance (not `ENTITY_ID_PATTERN`
+  // itself, which the separate sanity-check test below matches against) so
+  // there's no shared `lastIndex` state to worry about between the two.
+  const ALLOWED_NON_ENTITY_MATCHES = new Set(['button.press']);
+
+  function findHardcodedEntityId(text) {
+    const matches = text.match(new RegExp(ENTITY_ID_PATTERN_SOURCE, 'g')) || [];
+    return matches.find((m) => !ALLOWED_NON_ENTITY_MATCHES.has(m)) || null;
+  }
 
   function listJsFiles(dir) {
     const out = [];
@@ -1298,8 +1429,8 @@ describe('regression: no hardcoded entity ids in logic/rendering source', () => 
     const libDir = path.join(srcDir, 'lib');
     for (const file of listJsFiles(libDir)) {
       const text = fs.readFileSync(file, 'utf8');
-      const match = text.match(ENTITY_ID_PATTERN);
-      expect(match, `${path.relative(srcDir, file)} contains a hardcoded entity id: ${match?.[0]}`).toBeNull();
+      const match = findHardcodedEntityId(text);
+      expect(match, `${path.relative(srcDir, file)} contains a hardcoded entity id: ${match}`).toBeNull();
     }
   });
 
@@ -1308,8 +1439,8 @@ describe('regression: no hardcoded entity ids in logic/rendering source', () => 
     for (const file of listJsFiles(cardsDir)) {
       if (file.endsWith('.styles.js')) continue;
       const text = fs.readFileSync(file, 'utf8');
-      const match = text.match(ENTITY_ID_PATTERN);
-      expect(match, `${path.relative(srcDir, file)} contains a hardcoded entity id: ${match?.[0]}`).toBeNull();
+      const match = findHardcodedEntityId(text);
+      expect(match, `${path.relative(srcDir, file)} contains a hardcoded entity id: ${match}`).toBeNull();
     }
   });
 

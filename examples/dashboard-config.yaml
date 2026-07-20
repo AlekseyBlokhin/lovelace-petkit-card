@@ -46,6 +46,8 @@ cats:
   - name: Mittens
     color: "deep-orange"
 
+# name/icon are both overrides -- leave them unset (as the second chip
+# does below) to show the entity's own friendly name/icon instead.
 info_row:
   - entity: sensor.petkit_puramax_consumable_remaining
     name: Consumable
@@ -53,32 +55,68 @@ info_row:
     unit: "%"
     warn_below: 10
   - entity: binary_sensor.petkit_puramax_bin_full
-    name: Waste bin
-    icon: mdi:trash-can
     value_map:
       "on": Full
       "off": OK
     warn_state: "on"
 
+# tap_action/hold_action/double_tap_action use the same native action
+# config every built-in card's interactions do -- perform-action/toggle/
+# navigate/url/more-info/none, each with an optional native `confirmation`
+# dialog. A device with a pair of buttons that only make sense in one state
+# at a time (like Start/Exit Maintenance here) is just two ordinary rows,
+# each gated by its own `visibility` condition, rather than one button with
+# special-cased behavior -- together they read as a single control that
+# changes what it shows depending on the device's current state.
 controls_row:
   - name: Clean now
     icon: mdi:broom
-    action: press
     entity: button.petkit_puramax_clean
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.petkit_puramax_clean
   - name: Odor removal
     icon: mdi:spray-bottle
-    action: press
     entity: button.petkit_puramax_odor_removal
-    confirm: Run a manual odor removal cycle now?
-  - name: Maintenance
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.petkit_puramax_odor_removal
+      confirmation:
+        text: Run a manual odor removal cycle now?
+  - name: Start Maintenance
     icon: mdi:wrench
-    action: toggle_maintenance
-    start_entity: button.petkit_puramax_maintenance_start
-    exit_entity: button.petkit_puramax_maintenance_exit
-  - name: Details
-    icon: mdi:information-outline
-    action: more_info
-    entity: sensor.petkit_puramax_state
+    entity: button.petkit_puramax_maintenance_start
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.petkit_puramax_maintenance_start
+    visibility:
+      - condition: state
+        entity: sensor.petkit_puramax_state
+        state_not: maintenance_mode
+  - name: Exit Maintenance
+    icon: mdi:wrench
+    entity: button.petkit_puramax_maintenance_exit
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.petkit_puramax_maintenance_exit
+    visibility:
+      - condition: state
+        entity: sensor.petkit_puramax_state
+        state: maintenance_mode
+  # A toggle-style control (e.g. a switch) lights up automatically whenever
+  # its own entity is "on" -- no extra config needed for that part.
+  - name: Auto cleaning
+    entity: switch.petkit_puramax_auto_cleaning
+    tap_action:
+      action: toggle
 
 decline_threshold_pct: 60
 
