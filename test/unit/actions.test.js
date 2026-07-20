@@ -61,16 +61,13 @@ describe('runAction', () => {
     expect(hass.callService).toHaveBeenCalledWith('input_button', 'press', { entity_id: 'input_button.reset' });
   });
 
-  it('toggle: a lock entity calls lock/unlock instead of turn_on/turn_off', () => {
-    const hass = makeHass({ 'lock.front_door': { state: 'locked' } });
-    runAction(makeEl(), hass, { action: 'toggle', entity: 'lock.front_door' });
-    expect(hass.callService).toHaveBeenCalledWith('lock', 'unlock', { entity_id: 'lock.front_door' });
-  });
-
-  it('toggle: a cover entity calls open_cover/close_cover', () => {
-    const hass = makeHass({ 'cover.blinds': { state: 'closed' } });
-    runAction(makeEl(), hass, { action: 'toggle', entity: 'cover.blinds' });
-    expect(hass.callService).toHaveBeenCalledWith('cover', 'open_cover', { entity_id: 'cover.blinds' });
+  it('toggle: any other domain (e.g. fan) calls that domain\'s own turn_on/turn_off', () => {
+    // PETKIT never exposes lock/cover/scene/valve entities, so toggleEntity()
+    // only special-cases button/input_button (press) -- every other domain
+    // falls through to the generic turn_on/turn_off default, same as switch.
+    const hass = makeHass({ 'fan.bathroom': { state: 'on' } });
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'fan.bathroom' });
+    expect(hass.callService).toHaveBeenCalledWith('fan', 'turn_off', { entity_id: 'fan.bathroom' });
   });
 
   it('perform-action: splits the domain.service and merges data + target', () => {

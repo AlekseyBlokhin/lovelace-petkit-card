@@ -9,7 +9,7 @@ import { computeChipDisplay } from '../../lib/chips.js';
 import { getState, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
 import { resolveDeviceEntities, resolveDefaultInfoRow, resolveDefaultControlsRow } from '../../lib/device-entities.js';
 import { resolveCssColor } from '../../lib/color.js';
-import { bindActionHandlers } from '../../lib/actions.js';
+import { createTapHandlers } from '../../lib/actions.js';
 import { checkConditionsMet } from '../../lib/visibility.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
@@ -110,6 +110,7 @@ export class PetkitPuramaxCard extends LitElement {
     this._chartEventHist = [];
     this._analytics = null;
     this._configErrorMsg = null;
+    this._tapHandlersByIndex = new Map();
   }
 
   setConfig(config) {
@@ -163,6 +164,7 @@ export class PetkitPuramaxCard extends LitElement {
     this._analytics = null;
     this._chartVisits = [];
     this._chartEventHist = [];
+    this._tapHandlersByIndex = new Map();
     this._deviceEntities = this._resolveDeviceEntities();
     this._flush();
   }
@@ -509,29 +511,19 @@ export class PetkitPuramaxCard extends LitElement {
     return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || entityId || '';
   }
 
-  // `updated()` fires after every render/patch regardless of whether this
-  // element is actually connected to `document` -- unlike Lit's `ref()`
-  // directive, which is an `AsyncDirective` gated on the host's real
-  // connectedCallback/disconnectedCallback lifecycle (never fires for a
-  // card created but never appended, which is how this project's own test
-  // suite exercises the card -- confirmed the hard way). `dataset.bound`
-  // marks a button as already wired so `bindActionHandlers` runs exactly
-  // once per DOM node, the same guarantee `ref()` was meant to provide;
-  // `repeat()`'s per-spec key is what keeps a button the same node across
-  // re-renders (so this flag survives) as long as its position in
-  // `controls_row` doesn't change.
-  updated(changedProperties) {
-    super.updated(changedProperties);
-    this._bindControlActions();
-  }
-
-  _bindControlActions() {
-    const buttons = /** @type {NodeListOf<HTMLElement>} */ (this.shadowRoot.querySelectorAll('.ctrl-btn'));
-    buttons.forEach((btn) => {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = '1';
-      const i = Number(btn.id.slice('ctrl-'.length));
-      bindActionHandlers(btn, () => {
+  // One gesture-tracking slot (hold-timestamp/double-tap-timestamp state,
+  // see `createTapHandlers`) per `controls_row` index, created lazily and
+  // kept for the card's lifetime -- `repeat()`'s per-spec key is what keeps
+  // a control at a given index bound to the same slot across re-renders,
+  // the same identity guarantee a real DOM node would need for an
+  // imperative `addEventListener` to only run once. Declarative
+  // `@pointerdown=`/`@click=` bindings in the template below let Lit itself
+  // keep the listener current across renders, so there's no
+  // querySelectorAll/"already bound" bookkeeping needed at all.
+  _tapHandlersFor(i) {
+    let handlers = this._tapHandlersByIndex.get(i);
+    if (!handlers) {
+      handlers = createTapHandlers(() => {
         const spec = (this._config.controls_row || [])[i] || {};
         return {
           hass: this._hass,
@@ -541,7 +533,9 @@ export class PetkitPuramaxCard extends LitElement {
           fallbackEntity: spec.entity,
         };
       });
-    });
+      this._tapHandlersByIndex.set(i, handlers);
+    }
+    return handlers;
   }
 
   // ---------- render ----------
@@ -651,8 +645,15 @@ export class PetkitPuramaxCard extends LitElement {
       ({ spec, i }) => {
         const label = this._entityLabel(spec.name, spec.entity);
         const active = this._s(spec.entity, null) === 'on';
+        const handlers = this._tapHandlersFor(i);
         return html`
-          <ha-control-button class="ctrl-btn ${active ? 'ctrl-btn-active' : ''}" id="ctrl-${i}" label=${label}>
+          <ha-control-button
+            class="ctrl-btn ${active ? 'ctrl-btn-active' : ''}"
+            id="ctrl-${i}"
+            label=${label}
+            @pointerdown=${() => handlers.onPointerDown()}
+            @click=${(ev) => handlers.onClick(ev.currentTarget)}
+          >
             <div class="ctrl-btn-content">
               ${this._iconTemplate(spec.icon, spec.entity)}
               <span>${label}</span>

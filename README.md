@@ -179,7 +179,7 @@ you're not using `device_id` at all.
 | `last_used_by` | required if >1 cat, unless auto-detected via `device_id` | entity id | — | The sensor reporting which cat used the box most recently (e.g. PetKit's "Last used by"). Only needed to disambiguate cats when there's more than one — with a single cat every visit is trivially theirs. |
 | `error` | no | entity id | — | Sensor reporting the device's current error/status code. |
 | `last_event` | no | entity id | — | Sensor reporting the device's most recent maintenance/cleaning event. |
-| `state` | no | entity id | — | Sensor reporting the device's current operating state (used by the `toggle_maintenance` control action). |
+| `state` | no | entity id | — | Sensor reporting the device's current operating state (used to gate `controls_row[].visibility`, e.g. showing "Start Maintenance"/"Exit Maintenance" as a pair). |
 
 ### `cats[]`
 

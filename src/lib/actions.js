@@ -28,16 +28,15 @@
 
 import { fireMoreInfo, callService } from './ha-helpers.js';
 
-// Matches home-assistant/frontend's own `STATES_OFF` (`src/common/const.ts`).
-const STATES_OFF = ['closed', 'locked', 'off'];
-
 /**
- * Mirrors HA frontend's own `toggleEntity()`/`turnOnOffEntity()`
- * (`src/panels/lovelace/common/entity/toggle-entity.ts` +
- * `turn-on-off-entity.ts`) -- calls the entity's domain-specific service
- * directly, the same way a native HA card's `tap_action: toggle` does.
- * Deliberately NOT the generic backend `homeassistant.toggle` service: that
- * service (`homeassistant/components/homeassistant/__init__.py`,
+ * A trimmed-down `toggleEntity()`/`turnOnOffEntity()` (HA frontend's real
+ * versions, in `src/panels/lovelace/common/entity/toggle-entity.ts` +
+ * `turn-on-off-entity.ts`, handle every domain up to `lock`/`cover`/`scene`/
+ * `valve` -- PETKIT devices never expose any of those, so this card only
+ * needs `button`/`input_button` (`press`, no on/off state to read) and the
+ * `turn_on`/`turn_off` default every other domain here actually uses, e.g.
+ * `switch`). Deliberately NOT the generic backend `homeassistant.toggle`
+ * service: that service (`homeassistant/components/homeassistant/__init__.py`,
  * `async_handle_turn_service`) only forwards to a domain if the domain has
  * literally registered a service named `toggle`, which most domains --
  * including `button`, used by several of this card's default controls --
@@ -50,31 +49,13 @@ const STATES_OFF = ['closed', 'locked', 'off'];
  */
 function toggleEntity(hass, entityId) {
   const domain = entityId.split('.', 1)[0];
-  const serviceDomain = domain === 'group' ? 'homeassistant' : domain;
-  const stateObj = hass.states[entityId];
-  const turnOn = !stateObj || STATES_OFF.includes(stateObj.state);
-  let service;
-  switch (domain) {
-    case 'lock':
-      service = turnOn ? 'unlock' : 'lock';
-      break;
-    case 'cover':
-      service = turnOn ? 'open_cover' : 'close_cover';
-      break;
-    case 'button':
-    case 'input_button':
-      service = 'press';
-      break;
-    case 'scene':
-      service = 'turn_on';
-      break;
-    case 'valve':
-      service = turnOn ? 'open_valve' : 'close_valve';
-      break;
-    default:
-      service = turnOn ? 'turn_on' : 'turn_off';
+  if (domain === 'button' || domain === 'input_button') {
+    callService(hass, domain, 'press', { entity_id: entityId });
+    return;
   }
-  callService(hass, serviceDomain, service, { entity_id: entityId });
+  const stateObj = hass.states[entityId];
+  const turnOn = !stateObj || stateObj.state === 'off';
+  callService(hass, domain, turnOn ? 'turn_on' : 'turn_off', { entity_id: entityId });
 }
 
 /**
@@ -148,47 +129,71 @@ const HOLD_MS = 500;
 const DOUBLE_TAP_MS = 250;
 
 /**
- * Wires up `click` (used for both tap and hold-detection -- it fires
- * uniformly for mouse and touch input, unlike hand-rolling pointerup/down)
- * plus a `pointerdown` timestamp to distinguish a tap from a hold, and a
- * short delay to distinguish a single tap from the first half of a double
- * tap. Only sets up the timers a given row's config actually needs
- * (`holdAction`/`doubleTapAction` are commonly unset).
+ * Builds the tap/hold/double-tap gesture state machine as a pair of plain
+ * `onPointerDown`/`onClick` callbacks, with no DOM binding of its own --
+ * `bindActionHandlers()` below wires these to `addEventListener` for a
+ * plain-element caller, while a Lit-based caller can instead bind them
+ * declaratively (`@pointerdown=`/`@click=` in a template) and let Lit's own
+ * diffing keep the listener current across re-renders. Either way, the
+ * hold-timestamp/double-tap-timestamp state lives in this closure, created
+ * exactly once per gesture-tracking "slot" (once per bound element, or once
+ * per Lit template position via a caller-held cache) -- never per render.
  *
  * `getConfig` is a function, not a snapshot -- called fresh on every
- * interaction, so a single bound element keeps working correctly across
- * config updates that only change `.data`/highlight state without
- * rebuilding the DOM node itself.
+ * interaction, so a single slot keeps working correctly across config
+ * updates that only change `.data`/highlight state without rebuilding
+ * whatever it's attached to.
+ *
+ * @param {() => {hass: any, tapAction?: ActionConfig, holdAction?: ActionConfig, doubleTapAction?: ActionConfig, fallbackEntity?: string}} getConfig
+ * @returns {{ onPointerDown: () => void, onClick: (el: HTMLElement) => void }}
+ */
+export function createTapHandlers(getConfig) {
+  let downAt = 0;
+  let lastTapAt = 0;
+  return {
+    onPointerDown() {
+      downAt = Date.now();
+    },
+    onClick(el) {
+      const { hass, tapAction, holdAction, doubleTapAction, fallbackEntity } = getConfig();
+      if (holdAction && Date.now() - downAt >= HOLD_MS) {
+        runAction(el, hass, holdAction, fallbackEntity);
+        return;
+      }
+      const now = Date.now();
+      if (doubleTapAction && now - lastTapAt < DOUBLE_TAP_MS) {
+        lastTapAt = 0;
+        runAction(el, hass, doubleTapAction, fallbackEntity);
+        return;
+      }
+      lastTapAt = now;
+      if (doubleTapAction) {
+        // Give a potential second tap a chance to arrive and cancel this one.
+        setTimeout(() => {
+          if (Date.now() - lastTapAt >= DOUBLE_TAP_MS) runAction(el, hass, tapAction, fallbackEntity);
+        }, DOUBLE_TAP_MS);
+      } else {
+        runAction(el, hass, tapAction, fallbackEntity);
+      }
+    },
+  };
+}
+
+/**
+ * Wires up `click` (used for both tap and hold-detection -- it fires
+ * uniformly for mouse and touch input, unlike hand-rolling pointerup/down)
+ * plus a `pointerdown` timestamp, via plain `addEventListener` on `el` --
+ * for a caller that isn't already managing its own per-slot handler cache
+ * (e.g. a plain, non-Lit element). A Lit-based caller with several
+ * gesture-tracking slots (e.g. one per row in a repeated list) should use
+ * `createTapHandlers()` directly instead, caching one instance per slot and
+ * binding `@pointerdown=`/`@click=` in its template.
  *
  * @param {HTMLElement} el
  * @param {() => {hass: any, tapAction?: ActionConfig, holdAction?: ActionConfig, doubleTapAction?: ActionConfig, fallbackEntity?: string}} getConfig
  */
 export function bindActionHandlers(el, getConfig) {
-  let downAt = 0;
-  let lastTapAt = 0;
-  el.addEventListener('pointerdown', () => {
-    downAt = Date.now();
-  });
-  el.addEventListener('click', () => {
-    const { hass, tapAction, holdAction, doubleTapAction, fallbackEntity } = getConfig();
-    if (holdAction && Date.now() - downAt >= HOLD_MS) {
-      runAction(el, hass, holdAction, fallbackEntity);
-      return;
-    }
-    const now = Date.now();
-    if (doubleTapAction && now - lastTapAt < DOUBLE_TAP_MS) {
-      lastTapAt = 0;
-      runAction(el, hass, doubleTapAction, fallbackEntity);
-      return;
-    }
-    lastTapAt = now;
-    if (doubleTapAction) {
-      // Give a potential second tap a chance to arrive and cancel this one.
-      setTimeout(() => {
-        if (Date.now() - lastTapAt >= DOUBLE_TAP_MS) runAction(el, hass, tapAction, fallbackEntity);
-      }, DOUBLE_TAP_MS);
-    } else {
-      runAction(el, hass, tapAction, fallbackEntity);
-    }
-  });
+  const handlers = createTapHandlers(getConfig);
+  el.addEventListener('pointerdown', () => handlers.onPointerDown());
+  el.addEventListener('click', () => handlers.onClick(el));
 }
