@@ -1,9 +1,13 @@
 /**
  * Card CSS, ported verbatim from the original hand-authored card's `_css()`.
  * Kept as its own module (excluded from coverage) since it's presentational
- * data, not logic.
+ * data, not logic. A Lit `css` tagged template (construable stylesheet,
+ * assigned to `static styles` on the card) rather than a plain string
+ * injected via an `<style>` tag in `innerHTML`.
  */
-export const CARD_STYLES = `
+import { css } from 'lit';
+
+export const CARD_STYLES = css`
   /* Shared design tokens -- every gap/padding/border-radius below reuses one
      of these instead of repeating its own literal, so there's a single place
      to see (and change) the spacing/radius scale this card uses. Values are
@@ -173,3 +177,4 @@ export const CARD_STYLES = `
   .warn-banner { display: flex; align-items: center; gap: var(--pk-space-sm); background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); color: var(--warning-color); border-radius: var(--pk-radius-md); padding: var(--pk-space-sm) var(--pk-space-md); font-size: 0.85em; margin-bottom: var(--pk-space-sm); }
   .no-visit-banner { display: flex; align-items: center; gap: var(--pk-space-sm); background: rgba(var(--rgb-state-error-color, 244,67,54), 0.15); color: var(--error-color); border-radius: var(--pk-radius-md); padding: var(--pk-space-sm) var(--pk-space-md); font-size: 0.85em; margin-bottom: var(--pk-space-sm); }
 `;
+

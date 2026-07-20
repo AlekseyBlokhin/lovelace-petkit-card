@@ -470,6 +470,25 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
     expect(infoRows(editor).length).toBe(1);
   });
 
+  it('preserves panel expanded state across a round-trip into the Edit sub-page and back', () => {
+    // The list view and the detail sub-page are two entirely different
+    // templates at the same render position -- switching between them
+    // disposes the old ha-expansion-panel elements and builds fresh ones,
+    // unlike a plain value/structural edit that stays on the list view
+    // (see the other describe block above, and the class header comment on
+    // `_openDetail`/`_closeDetail`).
+    const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
+    panels[1].expanded = true; // Status chips
+    panels[2].expanded = true; // Controls
+
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    click(backButton(editor));
+
+    const after = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
+    expect(after[1].expanded).toBe(true);
+    expect(after[2].expanded).toBe(true);
+  });
+
   it('a value-only setConfig round-trip while in the sub-page updates the form in place, not a rebuild', () => {
     click(infoRows(editor)[0].querySelector('.edit-btn'));
     const before = detailForm(editor);

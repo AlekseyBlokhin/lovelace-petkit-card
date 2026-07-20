@@ -86,11 +86,13 @@ export function resolveDefaultInfoRow(hass, deviceId) {
  */
 export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
   const rows = [];
-  const pressAction = (entityId) => ({
-    action: 'perform-action',
-    perform_action: 'button.press',
-    target: { entity_id: entityId },
-  });
+  // `button`/`input_button` entities have no on/off state -- `press` is the
+  // only service they support. HA's own frontend `tap_action: toggle`
+  // already special-cases this (calls `press` directly, bypassing the
+  // on/off dichotomy entirely -- see `toggleEntity()` in
+  // `src/lib/actions.js`), so a plain `{action: 'toggle'}` is both simpler
+  // and exactly as correct as spelling out `perform-action`+`button.press`.
+  const toggleAction = { action: 'toggle' };
 
   const cleanStart = findByTranslationKey(hass, deviceId, 'start_cleaning');
   const cleanPause = findByTranslationKey(hass, deviceId, 'pause_cleaning');
@@ -98,7 +100,7 @@ export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
     rows.push({
       entity: cleanStart.entity_id,
       name: 'Clean Now',
-      tap_action: pressAction(cleanStart.entity_id),
+      tap_action: toggleAction,
       ...(cleanPause && stateEntityId
         ? { visibility: [{ condition: 'state', entity: stateEntityId, state_not: 'cleaning_litter_box' }] }
         : {}),
@@ -108,7 +110,7 @@ export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
     rows.push({
       entity: cleanPause.entity_id,
       name: 'Pause Cleaning',
-      tap_action: pressAction(cleanPause.entity_id),
+      tap_action: toggleAction,
       visibility: [{ condition: 'state', entity: stateEntityId, state: 'cleaning_litter_box' }],
     });
   }
@@ -119,7 +121,7 @@ export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
     rows.push({
       entity: maintStart.entity_id,
       name: 'Start Maintenance',
-      tap_action: pressAction(maintStart.entity_id),
+      tap_action: toggleAction,
       ...(maintExit && stateEntityId
         ? { visibility: [{ condition: 'state', entity: stateEntityId, state_not: 'maintenance_mode' }] }
         : {}),
@@ -129,19 +131,19 @@ export function resolveDefaultControlsRow(hass, deviceId, stateEntityId) {
     rows.push({
       entity: maintExit.entity_id,
       name: 'Exit Maintenance',
-      tap_action: pressAction(maintExit.entity_id),
+      tap_action: toggleAction,
       visibility: [{ condition: 'state', entity: stateEntityId, state: 'maintenance_mode' }],
     });
   }
 
   const dumpLitter = findByTranslationKey(hass, deviceId, 'dump_litter');
   if (dumpLitter) {
-    rows.push({ entity: dumpLitter.entity_id, name: 'Dump Litter', tap_action: pressAction(dumpLitter.entity_id) });
+    rows.push({ entity: dumpLitter.entity_id, name: 'Dump Litter', tap_action: toggleAction });
   }
 
   const autoCleaning = findByTranslationKey(hass, deviceId, 'auto_cleaning');
   if (autoCleaning) {
-    rows.push({ entity: autoCleaning.entity_id, name: 'Auto cleaning', tap_action: { action: 'toggle' } });
+    rows.push({ entity: autoCleaning.entity_id, name: 'Auto cleaning', tap_action: toggleAction });
   }
 
   return rows;

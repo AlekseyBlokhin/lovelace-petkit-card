@@ -161,37 +161,37 @@ describe('resolveDefaultControlsRow', () => {
       {
         entity: 'button.start_clean',
         name: 'Clean Now',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start_clean' } },
+        tap_action: { action: 'toggle' },
         visibility: [{ condition: 'state', entity: 'sensor.state', state_not: 'cleaning_litter_box' }],
       },
       {
         entity: 'button.pause_clean',
         name: 'Pause Cleaning',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.pause_clean' } },
+        tap_action: { action: 'toggle' },
         visibility: [{ condition: 'state', entity: 'sensor.state', state: 'cleaning_litter_box' }],
       },
       {
         entity: 'button.start_maint',
         name: 'Start Maintenance',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start_maint' } },
+        tap_action: { action: 'toggle' },
         visibility: [{ condition: 'state', entity: 'sensor.state', state_not: 'maintenance_mode' }],
       },
       {
         entity: 'button.exit_maint',
         name: 'Exit Maintenance',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.exit_maint' } },
+        tap_action: { action: 'toggle' },
         visibility: [{ condition: 'state', entity: 'sensor.state', state: 'maintenance_mode' }],
       },
     ]);
   });
 
-  it('adds Dump Litter as a plain press with no visibility condition', () => {
+  it('adds Dump Litter as a plain toggle (presses, since it\'s a button entity) with no visibility condition', () => {
     const hass = hassWithEntities({ 'button.dump': makeEntity('button.dump', 'dump_litter') });
     expect(resolveDefaultControlsRow(hass, 'dev1', 'sensor.state')).toEqual([
       {
         entity: 'button.dump',
         name: 'Dump Litter',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.dump' } },
+        tap_action: { action: 'toggle' },
       },
     ]);
   });
@@ -217,7 +217,7 @@ describe('resolveDefaultControlsRow', () => {
       {
         entity: 'button.start_clean',
         name: 'Clean Now',
-        tap_action: { action: 'perform-action', perform_action: 'button.press', target: { entity_id: 'button.start_clean' } },
+        tap_action: { action: 'toggle' },
       },
     ]);
   });

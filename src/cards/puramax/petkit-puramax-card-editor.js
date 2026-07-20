@@ -1,6 +1,29 @@
 /**
  * Visual config editor for petkit-puramax-card.
  *
+ * A `LitElement`, like the card itself: `render()` declares the whole
+ * editor from `this._config`/`this._hass`/`this._detailEditor` on every
+ * update, and Lit's own diffing patches only what changed. This is what
+ * lets almost all of the pre-Lit version's hand-written bookkeeping be
+ * deleted outright rather than ported: there's no more `_structureKey`/
+ * `_updateFormsInPlace` (deciding "rebuild everything" vs "push new data
+ * onto existing forms"), no more `_capturePanelExpanded`/
+ * `_restorePanelExpanded` (saving/restoring `ha-expansion-panel.expanded`
+ * around a rebuild), and no more `_formEls` tracking array -- Lit's own
+ * re-render already reuses existing DOM nodes (and whatever local state
+ * they hold, like a panel's `expanded` property) whenever the template
+ * shape at a given position doesn't change, which is exactly the guarantee
+ * all of that hand-written code existed to provide.
+ *
+ * Every mutating entry point (`setConfig`, the `hass` setter, and every
+ * config-mutation method below) ends by calling `_flush()`, which forces
+ * Lit's normally-async render to happen synchronously (via Lit's own public
+ * `performUpdate()` -- see its doc comment: "can be done in rare cases when
+ * you need to update synchronously"). This matches this editor's pre-Lit
+ * behavior exactly, where the dashboard host's `config-changed`/`setConfig`
+ * round-trip could always assume the DOM already reflected the latest
+ * config the instant a call returned.
+ *
  * Composes native Home Assistant frontend elements (globally available by
  * tag name, standard practice for custom card editors — no import needed):
  * `ha-form` for scalar fields, `ha-expansion-panel`/`ha-svg-icon` for
@@ -8,9 +31,9 @@
  * pattern native cards like Area Card use), `ha-sortable` for
  * drag-to-reorder, `ha-icon-button-prev` for the sub-page back button, and
  * `ha-icon-button`/`ha-icon` for row actions. `@mdi/js` is this project's
- * one real dependency (bundled at build time, so it costs nothing at
- * runtime) -- `ha-svg-icon`/`ha-form`'s `iconPath` schema field both need
- * real SVG path data, not an `mdi:name` string.
+ * one real dependency besides `lit` (bundled at build time, so it costs
+ * nothing at runtime) -- `ha-svg-icon`/`ha-form`'s `iconPath` schema field
+ * both need real SVG path data, not an `mdi:name` string.
  *
  * `ha-form`'s `expandable` schema type DOES nest the bound data object by
  * default -- both "Content" and "Analytics & alerts" below use
@@ -52,7 +75,9 @@
  * for an arbitrary nested condition array yet).
  */
 
+import { LitElement, html, nothing } from 'lit';
 import { mdiTextShort, mdiPaw, mdiViewGridOutline, mdiGestureTapButton, mdiChartBar, mdiDragHorizontalVariant } from '@mdi/js';
+import { EDITOR_STYLES } from './petkit-puramax-card-editor.styles.js';
 
 const ICON_CONTENT = mdiTextShort;
 const ICON_CATS = mdiPaw;
@@ -60,6 +85,8 @@ const ICON_CHIPS = mdiViewGridOutline;
 const ICON_CONTROLS = mdiGestureTapButton;
 const ICON_ANALYTICS = mdiChartBar;
 const ICON_DRAG_HANDLE = mdiDragHorizontalVariant;
+
+const computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
 
 // `name` must exactly match this cat's value as reported by
 // `device_entities.last_used_by` (e.g. the PetKit integration's "Last used
@@ -178,7 +205,14 @@ const MAIN_SCHEMA = [
   },
 ];
 
-export class PetkitPuramaxCardEditor extends HTMLElement {
+export class PetkitPuramaxCardEditor extends LitElement {
+  static styles = EDITOR_STYLES;
+
+  static properties = {
+    _config: { state: true },
+    _detailEditor: { state: true },
+  };
+
   constructor() {
     super();
     // Which row is showing its full-field sub-page instead of the normal
@@ -187,52 +221,30 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._detailEditor = null;
   }
 
-  // The dashboard host calls `setConfig()` again on every `config-changed`
-  // round-trip we ourselves fire -- i.e. on every value edit, not just when
-  // a genuinely different card config is assigned. A full `_render()` there
-  // would rebuild every `ha-expansion-panel`/`ha-form` from scratch on
-  // every keystroke's round-trip, collapsing panels and stealing focus.
-  // Only do that full rebuild when the config's *structure* actually
-  // changed (a row was added/removed, or a controls_row action changed its
-  // visible sub-fields); otherwise just push the new data onto the
-  // existing forms.
   setConfig(config) {
-    const newConfig = config || {};
-    const needsFullRender = !this.shadowRoot || this._structureKey(newConfig) !== this._lastStructureKey;
-    this._config = newConfig;
-    if (needsFullRender) {
-      this._render();
-    } else {
-      this._updateFormsInPlace();
-    }
+    this._config = config || {};
+    this._flush();
   }
 
-  // `hass` is re-set constantly -- on essentially every state change
-  // anywhere in the whole HA instance, not just when this card's own
-  // entities change -- so a full `_render()` (innerHTML rebuild) here would
-  // tear down and recreate every `ha-form`/`<input>` on practically every
-  // keystroke the user makes elsewhere in the dialog, which stole focus and
-  // reset the dialog's scroll position to the top after each character
-  // typed. Propagate the new `hass` onto the already-built forms in place
-  // instead; only `setConfig`/row add-remove (genuine structural changes)
-  // rebuild the DOM.
   set hass(hass) {
     this._hass = hass;
-    (this._formEls || []).forEach((form) => {
-      form.hass = hass;
-    });
+    this._flush();
   }
 
   get hass() {
     return this._hass;
   }
 
-  connectedCallback() {
-    this._render();
+  // Forces Lit's normally-async render to happen synchronously -- see the
+  // class header comment for why.
+  _flush() {
+    this.requestUpdate();
+    if (this.isUpdatePending) this.performUpdate();
   }
 
   _fireConfigChanged(newConfig) {
     this._config = newConfig;
+    this._flush();
     this.dispatchEvent(
       new CustomEvent('config-changed', {
         bubbles: true,
@@ -242,90 +254,11 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     );
   }
 
-  // Row counts fingerprint whether the config changed *structurally*. A
-  // value-only edit keeps the same fingerprint -- see `setConfig()`, which
-  // skips the full rebuild in that case so `ha-expansion-panel`s don't
-  // lose their open/closed state on every keystroke's round-trip through
-  // the dashboard host.
-  _structureKey(config) {
-    return JSON.stringify({
-      cats: (config.cats || []).length,
-      info_row: (config.info_row || []).length,
-      controls_row: (config.controls_row || []).length,
-    });
-  }
-
-  _capturePanelExpanded() {
-    if (!this.shadowRoot) return null;
-    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
-    return panels.length ? Array.from(panels).map((p) => /** @type {any} */ (p).expanded) : null;
-  }
-
-  _restorePanelExpanded(prevExpanded) {
-    if (!prevExpanded) return;
-    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
-    panels.forEach((/** @type {any} */ panel, i) => {
-      if (prevExpanded[i] !== undefined) panel.expanded = prevExpanded[i];
-    });
-  }
-
-  // Pushes updated data onto already-built form/summary nodes in place, the
-  // same no-rebuild approach the `hass` setter above already uses -- for
-  // the common case of a plain value edit (add/remove/reorder, and Edit/
-  // Done navigation, still go through a full render).
-  _updateFormsInPlace() {
-    if (this._detailEditor) {
-      const { kind, index } = this._detailEditor;
-      const list = this._config[kind === 'info' ? 'info_row' : 'controls_row'] || [];
-      if (this._detailForm && list[index]) this._detailForm.data = list[index];
-      return;
-    }
-    if (this._mainForm) this._mainForm.data = this._mainFormData();
-    const cats = this._config.cats || [];
-    (this._catNameForms || []).forEach((form, i) => {
-      if (cats[i]) form.data = cats[i];
-    });
-    (this._catColorForms || []).forEach((form, i) => {
-      if (cats[i]) form.data = cats[i];
-    });
-    const infoRows = this._config.info_row || [];
-    (this._infoRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, infoRows[i]));
-    const controlsRows = this._config.controls_row || [];
-    (this._controlRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, controlsRows[i]));
-  }
-
-  // A summary row has no input to lose focus from, so it's always safe to
-  // just refresh its icon/label in place. info_row and controls_row rows
-  // are both entity-based now (no more per-kind fallback needed).
-  _refreshRowRef(ref, spec) {
-    if (!ref || !spec) return;
-    if (ref.labelEl) this._fillSummaryLabel(ref.labelEl, spec);
-    if (ref.iconEl) {
-      ref.iconEl.icon = spec.icon || undefined;
-      ref.iconEl.stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : undefined;
-    }
-  }
-
   // Primary line: the configured name, else the entity's own live friendly
   // name, else the bare entity id as a last resort. Secondary (muted) line:
   // "Area → Device", the same context an entity picker's own selected-value
   // chip shows -- so a row looks the same whether you're looking at the
   // list view or its Edit sub-page's entity field.
-  _fillSummaryLabel(container, spec) {
-    container.innerHTML = '';
-    const primary = document.createElement('div');
-    primary.className = 'summary-label-primary';
-    primary.textContent = this._resolvedName(spec);
-    container.appendChild(primary);
-    const context = this._entityContext(spec.entity);
-    if (context) {
-      const secondary = document.createElement('div');
-      secondary.className = 'summary-label-secondary';
-      secondary.textContent = context;
-      container.appendChild(secondary);
-    }
-  }
-
   _resolvedName(spec) {
     if (spec.name) return spec.name;
     const stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : null;
@@ -346,15 +279,9 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     return areaName || deviceName || null;
   }
 
-  _render() {
-    if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
-    if (!this._config) return;
-    this._formEls = [];
-    if (this._detailEditor) {
-      this._renderDetail();
-    } else {
-      this._renderList();
-    }
+  render() {
+    if (!this._config) return nothing;
+    return this._detailEditor ? this._renderDetail() : this._renderList();
   }
 
   // ---------- sub-page detail editor (Edit on a chip/control row) ----------
@@ -366,45 +293,45 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     const spec = list[index];
     if (!spec) {
       // The row vanished from under us (shouldn't normally happen) -- fall
-      // back to the list view instead of rendering a dead sub-page.
-      this._detailEditor = null;
-      this._renderList();
-      return;
+      // back to the list view instead of rendering a dead sub-page. Can't
+      // mutate reactive state synchronously mid-render, so this is
+      // deferred a tick; the list view below is rendered directly in the
+      // meantime so nothing dead shows even for that one frame.
+      queueMicrotask(() => {
+        this._detailEditor = null;
+        this._flush();
+      });
+      return this._renderList();
     }
     const schema = kind === 'info' ? INFO_ROW_SCHEMA : CONTROLS_ROW_SCHEMA;
     const title = kind === 'info' ? 'Edit status chip' : 'Edit control';
-    this.shadowRoot.innerHTML = `
-      <style>
-        .detail-header { display: flex; align-items: center; gap: 8px; padding: 4px 0 12px; }
-        .detail-title { font-size: 1.1em; font-weight: 500; color: var(--primary-text-color); }
-      </style>
+    return html`
       <div class="detail-header">
-        <ha-icon-button-prev></ha-icon-button-prev>
+        <ha-icon-button-prev @click=${() => this._closeDetail()}></ha-icon-button-prev>
         <span class="detail-title">${title}</span>
       </div>
-      <div id="detail-body"></div>
+      <div id="detail-body">
+        <ha-form
+          .hass=${this._hass}
+          .schema=${schema}
+          .data=${spec}
+          .computeLabel=${computeLabel}
+          @value-changed=${(ev) => {
+            ev.stopPropagation();
+            this._updateRowAt(kind, index, ev.detail.value);
+          }}
+        ></ha-form>
+      </div>
     `;
-    this.shadowRoot
-      .querySelector('ha-icon-button-prev')
-      .addEventListener('click', () => this._closeDetail());
-
-    const form = /** @type {any} */ (document.createElement('ha-form'));
-    form.schema = schema;
-    form.data = spec;
-    form.hass = this._hass;
-    form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-    form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-      ev.stopPropagation();
-      this._updateRowAt(kind, index, ev.detail.value);
-    });
-    this._formEls.push(form);
-    this._detailForm = form;
-    this.shadowRoot.getElementById('detail-body').appendChild(form);
   }
 
   _closeDetail() {
     this._detailEditor = null;
-    this._render();
+    this._flush();
+    // Restore below, not deleted -- see the capture in `_openDetail()` for
+    // why this one case still needs it even with Lit's diffing.
+    this._restorePanelExpanded(this._capturedPanelExpanded);
+    this._capturedPanelExpanded = null;
   }
 
   _updateRowAt(kind, index, newSpec) {
@@ -414,64 +341,58 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._fireConfigChanged({ ...this._config, [key]: list });
   }
 
+  // Lit's diffing reuses existing DOM nodes (and whatever local state they
+  // hold, like `ha-expansion-panel.expanded`) whenever the template SHAPE
+  // at a given position doesn't change between renders -- which is true for
+  // every plain config edit (add/remove/reorder/value change), and is what
+  // lets the rest of this class skip the capture/restore bookkeeping the
+  // pre-Lit version needed everywhere. It is NOT true here: the list view
+  // and the detail sub-page are two entirely different templates at the
+  // same render position, so switching between them necessarily disposes
+  // the old subtree (including its `ha-expansion-panel`s) and builds a
+  // fresh one -- confirmed live (headless verification caught this; no
+  // existing test covered the list→detail→back round-trip specifically).
+  // Capturing here (still in list view) and restoring in `_closeDetail()`
+  // (right after the fresh panels exist again) is the smallest fix for
+  // that one genuine exception, not a wholesale revival of the old
+  // always-capture pattern.
+  _capturePanelExpanded() {
+    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    return panels.length ? Array.from(panels).map((p) => /** @type {any} */ (p).expanded) : null;
+  }
+
+  _restorePanelExpanded(prevExpanded) {
+    if (!prevExpanded) return;
+    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    panels.forEach((/** @type {any} */ panel, i) => {
+      if (prevExpanded[i] !== undefined) panel.expanded = prevExpanded[i];
+    });
+  }
+
+  _openDetail(kind, index) {
+    this._capturedPanelExpanded = this._capturePanelExpanded();
+    this._detailEditor = { kind, index };
+    this._flush();
+  }
+
   // ---------- normal multi-section list view ----------
 
   _renderList() {
-    const prevExpanded = this._capturePanelExpanded();
-    this._catNameForms = [];
-    this._catColorForms = [];
     const catCount = (this._config.cats || []).length;
     const infoCount = (this._config.info_row || []).length;
     const controlCount = (this._config.controls_row || []).length;
-    this.shadowRoot.innerHTML = `
-      <style>
-        .editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
-        /* No border-radius override here -- ha-form's own internal
-           "Content"/"Analytics & alerts" expandable groups render their
-           own ha-expansion-panel with HA's default corner radius; an
-           override on ONLY these editor-owned panels (Cats/Status chips/
-           Controls) can't reach inside ha-form's shadow DOM to match it,
-           so it's left at the native default everywhere for a consistent
-           look across all five sections. */
-        ha-expansion-panel { --expansion-panel-summary-padding: 0 16px; }
-        ha-expansion-panel h3[slot="header"] { margin: 0; font-size: 1em; font-weight: 500; }
-        ha-svg-icon[slot="leading-icon"] { color: var(--secondary-text-color); }
-        .panel-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 16px; }
-        .row { display: flex; align-items: center; gap: 4px; }
-        .row ha-form { flex: 1 1 auto; min-width: 0; }
-        .handle { display: flex; cursor: grab; color: var(--secondary-text-color); flex: 0 0 auto; touch-action: none; }
-        .handle:active { cursor: grabbing; }
-        .summary-row { padding: 0 4px; }
-        .summary-row ha-state-icon { color: var(--secondary-text-color); flex: 0 0 auto; }
-        .summary-label { flex: 1 1 auto; min-width: 0; }
-        .summary-label-primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--primary-text-color); }
-        .summary-label-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--secondary-text-color); font-size: 0.85em; }
-        #cats-rows { display: flex; flex-direction: column; gap: 12px; }
-        .cat-item { display: flex; flex-direction: column; gap: 4px; }
-        #info-rows, #controls-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
-        .add-row-form ha-form { display: block; }
-        .empty-hint { color: var(--secondary-text-color); font-size: 0.85em; padding: 4px 0 8px; }
-        .add-row { display: flex; justify-content: flex-start; margin-top: 4px; }
-        .add-btn {
-          display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-          border: 1px solid var(--divider-color, #ccc); border-radius: 8px;
-          background: none; color: var(--primary-color); padding: 8px 14px;
-          font-size: 0.85em; font-weight: 500; font-family: inherit;
-        }
-        .add-btn:hover { background: rgba(var(--rgb-primary-color, 3,169,244), 0.08); }
-        .add-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
-      </style>
+    return html`
       <div class="editor">
-        <div id="main-section"></div>
+        <div id="main-section">${this._renderMainForm()}</div>
 
         <ha-expansion-panel outlined>
-          <ha-svg-icon slot="leading-icon" id="cats-icon"></ha-svg-icon>
+          <ha-svg-icon slot="leading-icon" .path=${ICON_CATS}></ha-svg-icon>
           <h3 slot="header">Cats (${catCount})</h3>
           <div class="panel-body">
-            ${catCount === 0 ? '<div class="empty-hint">No cats configured yet.</div>' : ''}
-            <div id="cats-rows"></div>
+            ${catCount === 0 ? html`<div class="empty-hint">No cats configured yet.</div>` : nothing}
+            <div id="cats-rows">${this._renderCatsRows()}</div>
             <div class="add-row">
-              <button class="add-btn" id="add-cat" type="button">
+              <button class="add-btn" id="add-cat" type="button" @click=${() => this._addCat()}>
                 <ha-icon icon="mdi:plus"></ha-icon>Add cat
               </button>
             </div>
@@ -479,133 +400,108 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         </ha-expansion-panel>
 
         <ha-expansion-panel outlined>
-          <ha-svg-icon slot="leading-icon" id="chips-icon"></ha-svg-icon>
+          <ha-svg-icon slot="leading-icon" .path=${ICON_CHIPS}></ha-svg-icon>
           <h3 slot="header">Status chips (${infoCount})</h3>
           <div class="panel-body">
-            ${infoCount === 0 ? '<div class="empty-hint">No status chips configured yet.</div>' : ''}
-            <div id="info-rows"></div>
-            <div class="add-row-form" id="add-info-row"></div>
+            ${infoCount === 0 ? html`<div class="empty-hint">No status chips configured yet.</div>` : nothing}
+            <div id="info-rows">
+              ${this._renderRowsList(
+                'info_row',
+                (i) => this._openDetail('info', i),
+                (i) => this._removeInfoRow(i),
+                (o, n) => this._moveInfoRow(o, n),
+              )}
+            </div>
+            <div class="add-row-form" id="add-info-row">
+              ${this._renderAddPicker('Add a status chip', (entityId) => this._addInfoRowFromEntity(entityId))}
+            </div>
           </div>
         </ha-expansion-panel>
 
         <ha-expansion-panel outlined>
-          <ha-svg-icon slot="leading-icon" id="controls-icon"></ha-svg-icon>
+          <ha-svg-icon slot="leading-icon" .path=${ICON_CONTROLS}></ha-svg-icon>
           <h3 slot="header">Controls (${controlCount})</h3>
           <div class="panel-body">
-            ${controlCount === 0 ? '<div class="empty-hint">No control buttons configured yet.</div>' : ''}
-            <div id="controls-rows"></div>
-            <div class="add-row-form" id="add-control-row"></div>
+            ${controlCount === 0 ? html`<div class="empty-hint">No control buttons configured yet.</div>` : nothing}
+            <div id="controls-rows">
+              ${this._renderRowsList(
+                'controls_row',
+                (i) => this._openDetail('control', i),
+                (i) => this._removeControlRow(i),
+                (o, n) => this._moveControlRow(o, n),
+              )}
+            </div>
+            <div class="add-row-form" id="add-control-row">
+              ${this._renderAddPicker('Add a control', (entityId) => this._addControlRowFromEntity(entityId))}
+            </div>
           </div>
         </ha-expansion-panel>
       </div>
     `;
-    // `ha-svg-icon`'s `path` is a JS property (SVG path data), not settable
-    // as a plain HTML attribute in the template string above.
-    (/** @type {any} */ (this.shadowRoot.getElementById('cats-icon'))).path = ICON_CATS;
-    (/** @type {any} */ (this.shadowRoot.getElementById('chips-icon'))).path = ICON_CHIPS;
-    (/** @type {any} */ (this.shadowRoot.getElementById('controls-icon'))).path = ICON_CONTROLS;
-
-    this._renderMainForm();
-    this._renderCats();
-    this._renderInfoRows();
-    this._renderControlsRows();
-    this._renderAddPicker('add-info-row', 'Add a status chip', (entityId) => this._addInfoRowFromEntity(entityId));
-    this._renderAddPicker('add-control-row', 'Add a control', (entityId) => this._addControlRowFromEntity(entityId));
-    this.shadowRoot.getElementById('add-cat').addEventListener('click', () => this._addCat());
-    this._restorePanelExpanded(prevExpanded);
-    this._lastStructureKey = this._structureKey(this._config);
   }
 
-  // Builds a row's trailing "remove"/"edit" affordance as a native icon
-  // button (matching how HA's own settings lists act on an item) instead of
-  // a hand-styled text button.
-  _iconButton(icon, label, className, onClick) {
-    const btn = /** @type {any} */ (document.createElement('ha-icon-button'));
-    btn.className = className;
-    btn.label = label;
-    const iconEl = document.createElement('ha-icon');
-    iconEl.setAttribute('icon', icon);
-    btn.appendChild(iconEl);
-    btn.addEventListener('click', onClick);
-    return btn;
+  _dragHandleTemplate() {
+    return html`
+      <div class="handle">
+        <ha-svg-icon .path=${ICON_DRAG_HANDLE}></ha-svg-icon>
+      </div>
+    `;
   }
 
-  _removeIconButton(onClick) {
-    return this._iconButton('mdi:delete-outline', 'Remove', 'remove-btn', onClick);
+  // Matches how HA's own settings lists act on an item -- a native icon
+  // button, not a hand-styled text button.
+  _iconButtonTemplate(icon, label, className, onClick) {
+    return html`
+      <ha-icon-button class=${className} .label=${label} @click=${onClick}>
+        <ha-icon icon=${icon}></ha-icon>
+      </ha-icon-button>
+    `;
   }
 
-  _editIconButton(onClick) {
-    return this._iconButton('mdi:pencil-outline', 'Edit', 'edit-btn', onClick);
-  }
-
-  _dragHandle() {
-    const handle = document.createElement('div');
-    handle.className = 'handle';
-    const icon = /** @type {any} */ (document.createElement('ha-svg-icon'));
-    icon.path = ICON_DRAG_HANDLE;
-    handle.appendChild(icon);
-    return handle;
-  }
-
-  // `ha-sortable` wraps exactly one child container and reorders that
-  // container's children by drag; `handle-selector` restricts drag
-  // initiation to `.handle` elements so it never fights with clicking a
-  // row's own Edit/Delete buttons.
-  _createSortableList(onMoved) {
-    const sortable = /** @type {any} */ (document.createElement('ha-sortable'));
-    sortable.setAttribute('handle-selector', '.handle');
-    sortable.addEventListener('item-moved', (/** @type {CustomEvent} */ ev) => {
-      ev.stopPropagation();
-      onMoved(ev.detail.oldIndex, ev.detail.newIndex);
-    });
-    const list = document.createElement('div');
-    sortable.appendChild(list);
-    return { sortable, list };
-  }
-
-  _renderCats() {
-    const container = this.shadowRoot.getElementById('cats-rows');
-    container.innerHTML = '';
+  _renderCatsRows() {
     const cats = this._config.cats || [];
-    const { sortable, list } = this._createSortableList((oldIndex, newIndex) => this._moveCat(oldIndex, newIndex));
-    cats.forEach((cat, index) => {
-      const item = document.createElement('div');
-      item.className = 'cat-item';
-
-      const nameRow = document.createElement('div');
-      nameRow.className = 'row';
-      nameRow.appendChild(this._dragHandle());
-      const nameForm = /** @type {any} */ (document.createElement('ha-form'));
-      nameForm.schema = CAT_NAME_SCHEMA;
-      nameForm.data = cat;
-      nameForm.hass = this._hass;
-      nameForm.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-      nameForm.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-        ev.stopPropagation();
-        this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
-      });
-      this._formEls.push(nameForm);
-      this._catNameForms.push(nameForm);
-      nameRow.appendChild(nameForm);
-      nameRow.appendChild(this._removeIconButton(() => this._removeCat(index)));
-
-      const colorForm = /** @type {any} */ (document.createElement('ha-form'));
-      colorForm.schema = CAT_COLOR_SCHEMA;
-      colorForm.data = cat;
-      colorForm.hass = this._hass;
-      colorForm.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-      colorForm.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-        ev.stopPropagation();
-        this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
-      });
-      this._formEls.push(colorForm);
-      this._catColorForms.push(colorForm);
-
-      item.appendChild(nameRow);
-      item.appendChild(colorForm);
-      list.appendChild(item);
-    });
-    container.appendChild(sortable);
+    return html`
+      <ha-sortable
+        handle-selector=".handle"
+        @item-moved=${(ev) => {
+          ev.stopPropagation();
+          this._moveCat(ev.detail.oldIndex, ev.detail.newIndex);
+        }}
+      >
+        <div>
+          ${cats.map(
+            (cat, index) => html`
+              <div class="cat-item">
+                <div class="row">
+                  ${this._dragHandleTemplate()}
+                  <ha-form
+                    .hass=${this._hass}
+                    .schema=${CAT_NAME_SCHEMA}
+                    .data=${cat}
+                    .computeLabel=${computeLabel}
+                    @value-changed=${(ev) => {
+                      ev.stopPropagation();
+                      this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
+                    }}
+                  ></ha-form>
+                  ${this._iconButtonTemplate('mdi:delete-outline', 'Remove', 'remove-btn', () => this._removeCat(index))}
+                </div>
+                <ha-form
+                  .hass=${this._hass}
+                  .schema=${CAT_COLOR_SCHEMA}
+                  .data=${cat}
+                  .computeLabel=${computeLabel}
+                  @value-changed=${(ev) => {
+                    ev.stopPropagation();
+                    this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
+                  }}
+                ></ha-form>
+              </div>
+            `,
+          )}
+        </div>
+      </ha-sortable>
+    `;
   }
 
   _updateCat(index, newCat) {
@@ -618,44 +514,78 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     const cats = (this._config.cats || []).concat();
     cats.splice(newIndex, 0, cats.splice(oldIndex, 1)[0]);
     this._fireConfigChanged({ ...this._config, cats });
-    this._render();
   }
 
   _addCat() {
     const cats = [...(this._config.cats || []), { ...DEFAULT_NEW_CAT }];
     this._fireConfigChanged({ ...this._config, cats });
-    this._render();
   }
 
   _removeCat(index) {
     const cats = (this._config.cats || []).filter((_cat, i) => i !== index);
     this._fireConfigChanged({ ...this._config, cats });
-    this._render();
   }
 
   // ---------- info_row / controls_row: draggable summary list + Edit sub-page ----------
 
-  _renderInfoRows() {
-    const container = this.shadowRoot.getElementById('info-rows');
-    container.innerHTML = '';
-    this._infoRowRefs = [];
-    const rows = this._config.info_row || [];
-    const { sortable, list } = this._createSortableList((oldIndex, newIndex) => this._moveInfoRow(oldIndex, newIndex));
-    rows.forEach((spec, index) => {
-      const { el, ref } = this._buildSummaryRow({
-        spec,
-        onEdit: () => this._openDetail('info', index),
-        onRemove: () => this._removeInfoRow(index),
-      });
-      this._infoRowRefs[index] = ref;
-      list.appendChild(el);
-    });
-    container.appendChild(sortable);
+  _renderRowsList(key, onEdit, onRemove, onMove) {
+    const rows = this._config[key] || [];
+    return html`
+      <ha-sortable
+        handle-selector=".handle"
+        @item-moved=${(ev) => {
+          ev.stopPropagation();
+          onMove(ev.detail.oldIndex, ev.detail.newIndex);
+        }}
+      >
+        <div>
+          ${rows.map((spec, index) => this._summaryRowTemplate(spec, () => onEdit(index), () => onRemove(index)))}
+        </div>
+      </ha-sortable>
+    `;
   }
 
-  _openDetail(kind, index) {
-    this._detailEditor = { kind, index };
-    this._render();
+  // Icon: a real `ha-state-icon` (not a fixed generic default) resolves the
+  // entity's own icon the same way any built-in card would -- registry
+  // override, `attributes.icon`, or HA's own domain-icon table -- unless
+  // `spec.icon` overrides it. Label: name/friendly_name/entity_id plus a
+  // muted "Area → Device" line, matching the entity picker's own
+  // selected-value chip.
+  _summaryRowTemplate(spec, onEdit, onRemove) {
+    const context = this._entityContext(spec.entity);
+    return html`
+      <div class="row summary-row">
+        ${this._dragHandleTemplate()}
+        <ha-state-icon
+          .icon=${spec.icon || undefined}
+          .stateObj=${this._hass && this._hass.states ? this._hass.states[spec.entity] : undefined}
+        ></ha-state-icon>
+        <div class="summary-label"><div class="summary-label-primary">${this._resolvedName(spec)}</div>${
+          context ? html`<div class="summary-label-secondary">${context}</div>` : nothing
+        }</div>
+        ${this._iconButtonTemplate('mdi:pencil-outline', 'Edit', 'edit-btn', onEdit)}
+        ${this._iconButtonTemplate('mdi:delete-outline', 'Remove', 'remove-btn', onRemove)}
+      </div>
+    `;
+  }
+
+  // A single always-present entity picker (not an "Add" button that first
+  // inserts a blank draft row) -- picking an entity appends a fully-formed
+  // row directly, the same shape as HA's own Entities Card "Add entity".
+  _renderAddPicker(label, onPick) {
+    return html`
+      <ha-form
+        .hass=${this._hass}
+        .schema=${[{ name: 'entity', label, selector: { entity: {} } }]}
+        .data=${{}}
+        .computeLabel=${computeLabel}
+        @value-changed=${(ev) => {
+          ev.stopPropagation();
+          const entityId = ev.detail.value.entity;
+          if (entityId) onPick(entityId);
+        }}
+      ></ha-form>
+    `;
   }
 
   // No `name`/`icon` baked in -- left unset, exactly like hand-writing
@@ -663,38 +593,17 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _addInfoRowFromEntity(entityId) {
     const infoRow = [...(this._config.info_row || []), { entity: entityId }];
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
-    this._render();
   }
 
   _moveInfoRow(oldIndex, newIndex) {
     const infoRow = (this._config.info_row || []).concat();
     infoRow.splice(newIndex, 0, infoRow.splice(oldIndex, 1)[0]);
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
-    this._render();
   }
 
   _removeInfoRow(index) {
     const infoRow = (this._config.info_row || []).filter((_spec, i) => i !== index);
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
-    this._render();
-  }
-
-  _renderControlsRows() {
-    const container = this.shadowRoot.getElementById('controls-rows');
-    container.innerHTML = '';
-    this._controlRowRefs = [];
-    const rows = this._config.controls_row || [];
-    const { sortable, list } = this._createSortableList((oldIndex, newIndex) => this._moveControlRow(oldIndex, newIndex));
-    rows.forEach((spec, index) => {
-      const { el, ref } = this._buildSummaryRow({
-        spec,
-        onEdit: () => this._openDetail('control', index),
-        onRemove: () => this._removeControlRow(index),
-      });
-      this._controlRowRefs[index] = ref;
-      list.appendChild(el);
-    });
-    container.appendChild(sortable);
   }
 
   // No `name`/`icon`/`tap_action` baked in either -- an unset tap_action
@@ -703,62 +612,17 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   _addControlRowFromEntity(entityId) {
     const controlsRow = [...(this._config.controls_row || []), { entity: entityId }];
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
-    this._render();
   }
 
   _moveControlRow(oldIndex, newIndex) {
     const controlsRow = (this._config.controls_row || []).concat();
     controlsRow.splice(newIndex, 0, controlsRow.splice(oldIndex, 1)[0]);
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
-    this._render();
   }
 
   _removeControlRow(index) {
     const controlsRow = (this._config.controls_row || []).filter((_spec, i) => i !== index);
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
-    this._render();
-  }
-
-  // Icon: a real `ha-state-icon` (not a fixed generic default) resolves the
-  // entity's own icon the same way any built-in card would -- registry
-  // override, `attributes.icon`, or HA's own domain-icon table -- unless
-  // `spec.icon` overrides it. Label: name/friendly_name/entity_id plus a
-  // muted "Area → Device" line, matching the entity picker's own
-  // selected-value chip (see `_fillSummaryLabel`).
-  _buildSummaryRow({ spec, onEdit, onRemove }) {
-    const row = document.createElement('div');
-    row.className = 'row summary-row';
-    row.appendChild(this._dragHandle());
-    const icon = /** @type {any} */ (document.createElement('ha-state-icon'));
-    icon.icon = spec.icon || undefined;
-    icon.stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : undefined;
-    const label = document.createElement('div');
-    label.className = 'summary-label';
-    this._fillSummaryLabel(label, spec);
-    row.appendChild(icon);
-    row.appendChild(label);
-    row.appendChild(this._editIconButton(onEdit));
-    row.appendChild(this._removeIconButton(onRemove));
-    return { el: row, ref: { iconEl: icon, labelEl: label } };
-  }
-
-  // A single always-present entity picker (not an "Add" button that first
-  // inserts a blank draft row) -- picking an entity appends a fully-formed
-  // row directly, the same shape as HA's own Entities Card "Add entity".
-  _renderAddPicker(containerId, label, onPick) {
-    const container = this.shadowRoot.getElementById(containerId);
-    const form = /** @type {any} */ (document.createElement('ha-form'));
-    form.schema = [{ name: 'entity', label, selector: { entity: {} } }];
-    form.data = {};
-    form.hass = this._hass;
-    form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-    form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-      ev.stopPropagation();
-      const entityId = ev.detail.value.entity;
-      if (entityId) onPick(entityId);
-    });
-    this._formEls.push(form);
-    container.appendChild(form);
   }
 
   // The `show_*` toggles default to true when absent from config (the card
@@ -783,24 +647,18 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
   }
 
   _renderMainForm() {
-    const container = this.shadowRoot.getElementById('main-section');
-    // `ha-form` is a Home Assistant frontend element, not in any published
-    // DOM type — its properties are set dynamically, hence the `any` cast.
-    const form = /** @type {any} */ (document.createElement('ha-form'));
-    form.schema = MAIN_SCHEMA;
-    // Keys outside MAIN_SCHEMA (cats/info_row/controls_row/device_entities)
-    // round-trip untouched via ha-form's own data merge; `content`/`alerts`
-    // are read/written correctly on their own since both are `flatten`.
-    form.data = this._mainFormData();
-    form.hass = this._hass;
-    form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-    form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-      ev.stopPropagation();
-      this._fireConfigChanged(ev.detail.value);
-    });
-    this._formEls.push(form);
-    this._mainForm = form;
-    container.appendChild(form);
+    return html`
+      <ha-form
+        .hass=${this._hass}
+        .schema=${MAIN_SCHEMA}
+        .data=${this._mainFormData()}
+        .computeLabel=${computeLabel}
+        @value-changed=${(ev) => {
+          ev.stopPropagation();
+          this._fireConfigChanged(ev.detail.value);
+        }}
+      ></ha-form>
+    `;
   }
 }
 

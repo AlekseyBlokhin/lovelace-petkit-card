@@ -505,18 +505,22 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(hass.callService).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.start_clean' });
   });
 
-  it('a toggle tap_action calls homeassistant.toggle on the control\'s entity', async () => {
+  it('a toggle tap_action calls the entity\'s own domain-specific turn_on/turn_off directly, not homeassistant.toggle', () => {
+    // Matches HA's real frontend toggle behavior (see src/lib/actions.js) --
+    // NOT the generic backend homeassistant.toggle service, which silently
+    // no-ops for domains (like button, used by several of this card's own
+    // default controls) that never register a service literally named
+    // "toggle".
     const cfg = baseConfig({
       controls_row: [{ name: 'Fan', icon: 'mdi:fan', entity: 'switch.fan', tap_action: { action: 'toggle' } }],
     });
     card.setConfig(cfg);
-    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' }, 'switch.fan': { state: 'off' } });
     card.hass = hass;
-    await flush();
     const btn = card.shadowRoot.getElementById('ctrl-0');
     btn.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     btn.dispatchEvent(new Event('click', { bubbles: true }));
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.fan' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.fan' });
   });
 
   it('highlights a toggle-style control (ctrl-btn-active) whenever its entity is currently "on"', async () => {

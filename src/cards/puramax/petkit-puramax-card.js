@@ -1,4 +1,6 @@
-import { formatDuration, formatHoursAgo, escapeHtml } from '../../lib/format.js';
+import { LitElement, html, svg, nothing } from 'lit';
+import { repeat } from 'lit/directives/repeat.js';
+import { formatDuration, formatHoursAgo } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
 import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
@@ -36,12 +38,33 @@ import {
  *    `_fetchVisits()` for how a duration+identity per visit is derived from
  *    those two generic sensors.
  *  - Working Records is `device_entities.last_event`'s own history, shown
- *    verbatim — see `_renderChartArea()`'s Working Records section for why
- *    it's deliberately NOT cross-referenced with the reconstruction above.
+ *    verbatim — see `_renderRecordsSection()` for why it's deliberately NOT
+ *    cross-referenced with the reconstruction above.
  *
- * DOM/lifecycle only — all math lives in `src/lib/*`.
+ * A `LitElement`: `render()` declares the whole card from current state on
+ * every update, and Lit's own diffing patches only what changed (auto
+ * escaping text/attribute interpolations, `.prop=` bindings for live object
+ * references like `ha-state-icon.stateObj`, and the `repeat()` directive for
+ * `controls_row` since its visible set can change every `hass` tick). HA's
+ * real Lovelace host, like every other Lit-based custom card, doesn't
+ * require synchronous rendering — but this card's own `hass`
+ * setter/`setConfig()`/day-nav flow force a synchronous flush (via Lit's
+ * public `performUpdate()`) anyway, purely so the DOM reflects a change the
+ * instant the call returns, matching this card's previous (pre-Lit)
+ * behavior exactly.
  */
-export class PetkitPuramaxCard extends HTMLElement {
+export class PetkitPuramaxCard extends LitElement {
+  static styles = CARD_STYLES;
+
+  static properties = {
+    _config: { state: true },
+    _dayOffset: { state: true },
+    _chartVisits: { state: true },
+    _chartEventHist: { state: true },
+    _analytics: { state: true },
+    _configErrorMsg: { state: true },
+  };
+
   static getConfigElement() {
     return document.createElement('petkit-puramax-card-editor');
   }
@@ -78,6 +101,15 @@ export class PetkitPuramaxCard extends HTMLElement {
         },
       ],
     };
+  }
+
+  constructor() {
+    super();
+    this._dayOffset = 0;
+    this._chartVisits = [];
+    this._chartEventHist = [];
+    this._analytics = null;
+    this._configErrorMsg = null;
   }
 
   setConfig(config) {
@@ -129,12 +161,10 @@ export class PetkitPuramaxCard extends HTMLElement {
     this._config = { ...config, device_entities: deviceEntities };
     this._dayOffset = 0;
     this._analytics = null;
-    this._chartData = null;
-    this._loadingChart = false;
-    this._loadingAnalytics = false;
+    this._chartVisits = [];
+    this._chartEventHist = [];
     this._deviceEntities = this._resolveDeviceEntities();
-    if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
-    this._render();
+    this._flush();
   }
 
   // Explicit `device_entities` always wins over what's auto-detected from
@@ -168,11 +198,6 @@ export class PetkitPuramaxCard extends HTMLElement {
     return null;
   }
 
-  _renderError(message) {
-    if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
-    this.shadowRoot.innerHTML = `<ha-card><div style="padding: 16px;"><ha-alert alert-type="error">${escapeHtml(message)}</ha-alert></div></ha-card>`;
-  }
-
   set hass(hass) {
     const prevHass = this._hass;
     this._hass = hass;
@@ -180,14 +205,26 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!this._built) {
       this._built = true;
       this._build();
-      return;
+    } else {
+      this._maybeRefreshOnNewVisit(prevHass);
     }
-    this._updateLiveValues();
-    this._maybeRefreshOnNewVisit(prevHass);
+    this._flush();
   }
 
   get hass() {
     return this._hass;
+  }
+
+  // Forces Lit's normally-async render to happen synchronously, so the DOM
+  // reflects every mutating call (hass/setConfig/day-nav/etc.) the instant
+  // it returns -- matching this card's pre-Lit synchronous behavior. HA's
+  // real Lovelace host doesn't need this (no different than any other
+  // Lit-based custom card to it), but nothing inspects this card's
+  // shadowRoot synchronously in production either way, so forcing it costs
+  // nothing and avoids a stale-content frame.
+  _flush() {
+    this.requestUpdate();
+    if (this.isUpdatePending) this.performUpdate();
   }
 
   getCardSize() {
@@ -196,17 +233,15 @@ export class PetkitPuramaxCard extends HTMLElement {
 
   _build() {
     const err = this._configError();
-    if (err) {
-      this._renderError(err);
-      return;
-    }
-    this._render();
+    this._configErrorMsg = err;
+    if (err) return;
     this._loadDay();
     this._loadAnalytics();
     this._startNoVisitTimer();
   }
 
   connectedCallback() {
+    super.connectedCallback();
     if (this._hass && !this._built) {
       this._built = true;
       this._build();
@@ -214,6 +249,7 @@ export class PetkitPuramaxCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    super.disconnectedCallback();
     if (this._noVisitTimer) {
       clearInterval(this._noVisitTimer);
       this._noVisitTimer = null;
@@ -335,16 +371,19 @@ export class PetkitPuramaxCard extends HTMLElement {
   // Deliberately NOT one of `cfg.cats`, so it's naturally excluded from
   // per-named-cat Analytics (which iterates `cfg.cats`) while still
   // participating in the chart (gray stem) and the usage-line legend on
-  // days it occurs -- see `_renderChartArea`.
+  // days it occurs -- see `_renderChartSection`.
   _unknownCat() {
     return { name: UNKNOWN_CAT_LABEL, color: this._config.unknown_cat_color || DEFAULT_UNKNOWN_CAT_COLOR };
   }
 
   // ---------- data loading ----------
+  // Deliberately no "Loading…" interstitial: `_dayOffset` (and its
+  // day-label/nav-button rendering) update immediately, but `_chartVisits`/
+  // `_chartEventHist` are only reassigned once the fetch actually resolves
+  // -- until then, `render()` keeps showing whatever they held before, so
+  // paging through days quickly never flashes a placeholder frame.
   async _loadDay() {
     if (!this._hass) return;
-    this._loadingChart = true;
-    this._renderChartArea();
     const de = this._deviceEntities;
     const { start, end } = dayBounds(this._dayOffset);
     let visits = [];
@@ -364,14 +403,11 @@ export class PetkitPuramaxCard extends HTMLElement {
     }
     this._chartVisits = visits;
     this._chartEventHist = eventHist;
-    this._loadingChart = false;
-    this._renderChartArea();
+    this._flush();
   }
 
   async _loadAnalytics() {
     if (!this._hass) return;
-    this._loadingAnalytics = true;
-    this._renderAnalyticsArea();
     const cfg = this._config;
     const now = new Date();
     // 7 raw days of visit reconstruction covers both the 3d and 7d windows
@@ -394,9 +430,8 @@ export class PetkitPuramaxCard extends HTMLElement {
       perCat[cat.name] = { ...summarize(byDay, todayKey), lastVisitTs };
     });
     this._analytics = perCat;
-    this._loadingAnalytics = false;
     this._checkNoVisitAlerts();
-    this._renderAnalyticsArea();
+    this._flush();
   }
 
   // Recomputes each cat's overdue-for-a-visit state against the current
@@ -428,7 +463,7 @@ export class PetkitPuramaxCard extends HTMLElement {
         this._notifiedCats.delete(cat.name);
       }
     });
-    this._renderAnalyticsArea();
+    this._flush();
   }
 
   _sendNoVisitNotification(cat, result) {
@@ -446,200 +481,26 @@ export class PetkitPuramaxCard extends HTMLElement {
     callService(this._hass, 'notify', serviceName, { message, title: 'Litter box alert' });
   }
 
-  // ---------- render ----------
-  _render() {
-    const cfg = this._config;
-    this.shadowRoot.innerHTML = `
-      <style>${CARD_STYLES}</style>
-      <ha-card>
-        <div class="header">
-          <div class="title">${cfg.title || DEFAULT_TITLE}</div>
-          ${cfg.show_state !== false ? '<div class="state-badge" id="state-badge" hidden></div>' : ''}
-        </div>
-        <div class="status-row" id="status-row"></div>
-        <div class="controls-row" id="controls-row"></div>
-        ${
-          cfg.show_history !== false
-            ? `
-        <div class="chart-section">
-          <div class="chart-header">
-            <button class="nav-btn" id="prev-day">&#9664;</button>
-            <div class="day-label" id="day-label"></div>
-            <button class="nav-btn" id="next-day">&#9654;</button>
-          </div>
-          <div class="usage-section">
-            <div id="usage-body"></div>
-          </div>
-          <div class="chart-area" id="chart-area"></div>
-        </div>`
-            : ''
-        }
-        ${
-          cfg.show_analytics !== false
-            ? `
-        <div class="analytics-section">
-          <div class="section-title">Analytics</div>
-          <div id="no-visit-banner"></div>
-          <div id="decline-banner"></div>
-          <div class="analytics-grid" id="analytics-grid"></div>
-        </div>`
-            : ''
-        }
-        ${
-          cfg.show_working_records !== false
-            ? `
-        <div class="records-section">
-          <div class="section-title">Working Records</div>
-          <div class="records-list" id="records-list"></div>
-        </div>`
-            : ''
-        }
-      </ha-card>
-    `;
-    const prevBtn = this.shadowRoot.getElementById('prev-day');
-    const nextBtn = this.shadowRoot.getElementById('next-day');
-    if (prevBtn) prevBtn.addEventListener('click', () => this._changeDay(-1));
-    if (nextBtn) nextBtn.addEventListener('click', () => this._changeDay(1));
-    this._updateLiveValues();
-    this._renderChartArea();
-    this._renderAnalyticsArea();
-  }
-
   _changeDay(delta) {
     this._dayOffset += delta;
     if (this._dayOffset > 0) this._dayOffset = 0;
+    this._flush();
     this._loadDay();
   }
 
-  _updateLiveValues() {
-    if (!this._built) return;
-    const cfg = this._config;
-    const de = this._deviceEntities;
-
-    // state badge: top-right of the header, tappable like a status chip.
-    // `device_entities.state` has no other visible use on the card today.
-    const stateBadge = this.shadowRoot.getElementById('state-badge');
-    if (stateBadge) {
-      const stateValue = this._s(de.state, null);
-      stateBadge.hidden = !stateValue;
-      if (stateValue) {
-        stateBadge.textContent = stateValue.replace(/_/g, ' ');
-        stateBadge.dataset.entity = de.state;
-      }
-      if (!stateBadge.dataset.bound) {
-        stateBadge.dataset.bound = '1';
-        stateBadge.setAttribute('tabindex', '0');
-        const openState = () => {
-          if (stateBadge.dataset.entity) fireMoreInfo(this, stateBadge.dataset.entity);
-        };
-        stateBadge.addEventListener('click', openState);
-        stateBadge.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter' || ev.key === ' ') {
-            ev.preventDefault();
-            openState();
-          }
-        });
-      }
-    }
-
-    // status row: fully config-driven — add/remove/reorder chips via `info_row` in YAML
-    const statusRow = this.shadowRoot.getElementById('status-row');
-    if (statusRow) {
-      const errorState = this._s(de.error, 'no_error');
-      const hasError = errorState && errorState !== 'no_error';
-      const infoRow = cfg.info_row || [];
-      statusRow.innerHTML = [
-        ...infoRow.map((spec) => this._renderInfoChip(spec)),
-        hasError ? this._chip('mdi:alert', 'Error', errorState.replace(/_/g, ' '), true, de.error) : '',
-      ].join('');
-      this._bindStateIcons(statusRow);
-      if (!statusRow.dataset.bound) {
-        statusRow.dataset.bound = '1';
-        // Delegated (not per-chip) so it survives `statusRow.innerHTML` being
-        // rebuilt on every live-value update above.
-        const openChip = (ev) => {
-          const chip = ev.target.closest('.chip[data-entity]');
-          if (chip) fireMoreInfo(this, chip.dataset.entity);
-        };
-        statusRow.addEventListener('click', openChip);
-        statusRow.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter' || ev.key === ' ') {
-            ev.preventDefault();
-            openChip(ev);
-          }
-        });
-      }
-    }
-
-    // controls row: fully config-driven — add/remove/reorder buttons via
-    // `controls_row` in YAML. Re-evaluated on every live update (not built
-    // once) since `visibility` can change which controls are currently
-    // shown as device state changes (e.g. a "Start maintenance"/"Exit
-    // maintenance" pair) -- but the DOM/click-handler rebuild only actually
-    // happens when the *visible set* changes, not on every tick.
-    const controlsRow = this.shadowRoot.getElementById('controls-row');
-    if (controlsRow) {
-      const controls = cfg.controls_row || [];
-      const visible = controls.map((spec, i) => ({ spec, i })).filter(({ spec }) => checkConditionsMet(spec.visibility, this._hass));
-      const visKey = visible.map((v) => v.i).join(',');
-      if (controlsRow.dataset.visKey !== visKey) {
-        controlsRow.dataset.visKey = visKey;
-        controlsRow.innerHTML = visible
-          .map(
-            ({ spec, i }) => `
-      <ha-control-button class="ctrl-btn" id="ctrl-${i}" label="${escapeHtml(this._entityLabel(spec.name, spec.entity))}">
-        <div class="ctrl-btn-content">
-          ${this._iconMarkup(spec.icon, spec.entity)}
-          <span>${escapeHtml(this._entityLabel(spec.name, spec.entity))}</span>
-        </div>
-      </ha-control-button>
-    `,
-          )
-          .join('');
-        this._bindStateIcons(controlsRow);
-        visible.forEach(({ spec, i }) => {
-          const btn = this.shadowRoot.getElementById(`ctrl-${i}`);
-          bindActionHandlers(btn, () => ({
-            hass: this._hass,
-            tapAction: spec.tap_action,
-            holdAction: spec.hold_action,
-            doubleTapAction: spec.double_tap_action,
-            fallbackEntity: spec.entity,
-          }));
-        });
-      }
-      // Highlights a toggle-style control (e.g. "Auto cleaning") whenever
-      // its own entity is currently "on" -- cheap enough to refresh every
-      // tick regardless of whether the visible set above just rebuilt.
-      visible.forEach(({ spec, i }) => {
-        const btn = this.shadowRoot.getElementById(`ctrl-${i}`);
-        if (btn) btn.classList.toggle('ctrl-btn-active', this._s(spec.entity, null) === 'on');
-      });
-    }
-  }
-
+  // ---------- icon/name resolution ----------
   // Resolves the icon/name a chip or control shows when its config leaves
-  // `icon`/`name` unset: the entity's own current icon/friendly name,
-  // never baked into config -- `icon`/`name` in config only ever override.
-
-  // A real `<ha-state-icon>` (bound to the live state object just below via
-  // `_bindStateIcons`) when no explicit icon is configured -- it resolves
-  // the entity's own icon (registry override, `attributes.icon`, or HA's
-  // domain-icon table) the same way any built-in card would, instead of
+  // `icon`/`name` unset: the entity's own current icon/friendly name, never
+  // baked into config -- `icon`/`name` in config only ever override. A real
+  // `ha-state-icon` (`.stateObj` bound directly, a live object reference --
+  // impossible to express as a plain HTML attribute, which is why the
+  // pre-Lit version needed a manual post-render DOM pass for this) resolves
+  // the entity's own icon the same way any built-in card would, instead of
   // this card guessing a single generic fallback for every entity domain.
-  _iconMarkup(icon, entityId) {
-    if (icon) return `<ha-icon icon="${escapeHtml(icon)}"></ha-icon>`;
-    if (entityId) return `<ha-state-icon data-icon-entity="${escapeHtml(entityId)}"></ha-state-icon>`;
-    return '<ha-icon icon="mdi:information-outline"></ha-icon>';
-  }
-
-  // `.stateObj` is a live object reference, not settable via the innerHTML
-  // string `_iconMarkup` returns -- bind it in a pass over the container
-  // right after every innerHTML rebuild.
-  _bindStateIcons(container) {
-    container.querySelectorAll('ha-state-icon[data-icon-entity]').forEach((el) => {
-      /** @type {any} */ (el).stateObj = this._hass && this._hass.states ? this._hass.states[el.dataset.iconEntity] : undefined;
-    });
+  _iconTemplate(icon, entityId) {
+    if (icon) return html`<ha-icon icon=${icon}></ha-icon>`;
+    if (entityId) return html`<ha-state-icon .stateObj=${this._hass?.states?.[entityId]}></ha-state-icon>`;
+    return html`<ha-icon icon="mdi:information-outline"></ha-icon>`;
   }
 
   _entityLabel(name, entityId) {
@@ -648,61 +509,189 @@ export class PetkitPuramaxCard extends HTMLElement {
     return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || entityId || '';
   }
 
+  // `updated()` fires after every render/patch regardless of whether this
+  // element is actually connected to `document` -- unlike Lit's `ref()`
+  // directive, which is an `AsyncDirective` gated on the host's real
+  // connectedCallback/disconnectedCallback lifecycle (never fires for a
+  // card created but never appended, which is how this project's own test
+  // suite exercises the card -- confirmed the hard way). `dataset.bound`
+  // marks a button as already wired so `bindActionHandlers` runs exactly
+  // once per DOM node, the same guarantee `ref()` was meant to provide;
+  // `repeat()`'s per-spec key is what keeps a button the same node across
+  // re-renders (so this flag survives) as long as its position in
+  // `controls_row` doesn't change.
+  updated(changedProperties) {
+    super.updated(changedProperties);
+    this._bindControlActions();
+  }
+
+  _bindControlActions() {
+    const buttons = /** @type {NodeListOf<HTMLElement>} */ (this.shadowRoot.querySelectorAll('.ctrl-btn'));
+    buttons.forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      const i = Number(btn.id.slice('ctrl-'.length));
+      bindActionHandlers(btn, () => {
+        const spec = (this._config.controls_row || [])[i] || {};
+        return {
+          hass: this._hass,
+          tapAction: spec.tap_action,
+          holdAction: spec.hold_action,
+          doubleTapAction: spec.double_tap_action,
+          fallbackEntity: spec.entity,
+        };
+      });
+    });
+  }
+
+  // ---------- render ----------
+  render() {
+    if (this._configErrorMsg) {
+      return html`<ha-card><div style="padding: 16px;"><ha-alert alert-type="error">${this._configErrorMsg}</ha-alert></div></ha-card>`;
+    }
+    if (!this._config) return nothing;
+    const cfg = this._config;
+    return html`
+      <ha-card>
+        <div class="header">
+          <div class="title">${cfg.title || DEFAULT_TITLE}</div>
+          ${cfg.show_state !== false ? this._renderStateBadge() : nothing}
+        </div>
+        <div class="status-row" id="status-row">${this._renderStatusRow()}</div>
+        <div class="controls-row" id="controls-row">${this._renderControlsRow()}</div>
+        ${cfg.show_history !== false ? this._renderChartSection() : nothing}
+        ${cfg.show_analytics !== false ? this._renderAnalyticsSection() : nothing}
+        ${cfg.show_working_records !== false ? this._renderRecordsSection() : nothing}
+      </ha-card>
+    `;
+  }
+
+  // Top-right of the header, tappable like a status chip. `device_entities.state`
+  // has no other visible use on the card today.
+  _renderStateBadge() {
+    const de = this._deviceEntities;
+    const stateValue = this._s(de.state, null);
+    const openState = () => {
+      if (de.state) fireMoreInfo(this, de.state);
+    };
+    return html`<div
+      class="state-badge"
+      id="state-badge"
+      ?hidden=${!stateValue}
+      tabindex="0"
+      @click=${openState}
+      @keydown=${(ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          openState();
+        }
+      }}
+    >${stateValue ? stateValue.replace(/_/g, ' ') : ''}</div>`;
+  }
+
+  // Fully config-driven — add/remove/reorder chips via `info_row` in YAML.
+  _renderStatusRow() {
+    const cfg = this._config;
+    const de = this._deviceEntities;
+    const errorState = this._s(de.error, 'no_error');
+    const hasError = errorState && errorState !== 'no_error';
+    const infoRow = cfg.info_row || [];
+    return html`
+      ${infoRow.map((spec) => this._renderInfoChip(spec))}
+      ${hasError ? this._chipTemplate('mdi:alert', 'Error', errorState.replace(/_/g, ' '), true, de.error) : nothing}
+    `;
+  }
+
   _renderInfoChip(spec) {
     const rawValue = this._s(spec.entity, null);
     const { display, warn } = computeChipDisplay(spec, rawValue);
-    return this._chip(spec.icon, this._entityLabel(spec.name, spec.entity), display, warn, spec.entity);
+    return this._chipTemplate(spec.icon, this._entityLabel(spec.name, spec.entity), display, warn, spec.entity);
   }
 
-  _chip(icon, label, value, warn, entityId) {
-    // label/value are often a live entity state/name -- escape both, since
-    // neither is guaranteed free of HTML metacharacters.
-    // Tappable (opens the entity's native more-info dialog, like a built-in
-    // badge/entity row) whenever it's backed by a real entity.
-    const tapAttrs = entityId ? ` data-entity="${escapeHtml(entityId)}" tabindex="0"` : '';
-    return `
-      <div class="chip ${warn ? 'warn' : ''} ${entityId ? 'tappable' : ''}"${tapAttrs}>
-        ${this._iconMarkup(icon, entityId)}
-        <div class="chip-text"><div class="chip-label">${escapeHtml(label)}</div><div class="chip-value">${escapeHtml(value)}</div></div>
-      </div>`;
+  _chipTemplate(icon, label, value, warn, entityId) {
+    const open = () => {
+      if (entityId) fireMoreInfo(this, entityId);
+    };
+    return html`
+      <div
+        class="chip ${warn ? 'warn' : ''} ${entityId ? 'tappable' : ''}"
+        data-entity=${entityId || nothing}
+        tabindex=${entityId ? '0' : nothing}
+        @click=${entityId ? open : nothing}
+        @keydown=${entityId
+          ? (ev) => {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                ev.preventDefault();
+                open();
+              }
+            }
+          : nothing}
+      >
+        ${this._iconTemplate(icon, entityId)}
+        <div class="chip-text"><div class="chip-label">${label}</div><div class="chip-value">${value}</div></div>
+      </div>
+    `;
+  }
+
+  // controls_row: fully config-driven — add/remove/reorder buttons via
+  // `controls_row` in YAML. `visibility` can change which controls are
+  // currently shown as device state changes (e.g. a "Start
+  // maintenance"/"Exit maintenance" pair); `repeat()`, keyed by each spec's
+  // original index, gives minimal keyed DOM patching for that for free —
+  // no manual "did the visible set change" bookkeeping needed.
+  _renderControlsRow() {
+    const cfg = this._config;
+    const controls = cfg.controls_row || [];
+    const visible = controls
+      .map((spec, i) => ({ spec, i }))
+      .filter(({ spec }) => checkConditionsMet(spec.visibility, this._hass));
+    return repeat(
+      visible,
+      ({ i }) => i,
+      ({ spec, i }) => {
+        const label = this._entityLabel(spec.name, spec.entity);
+        const active = this._s(spec.entity, null) === 'on';
+        return html`
+          <ha-control-button class="ctrl-btn ${active ? 'ctrl-btn-active' : ''}" id="ctrl-${i}" label=${label}>
+            <div class="ctrl-btn-content">
+              ${this._iconTemplate(spec.icon, spec.entity)}
+              <span>${label}</span>
+            </div>
+          </ha-control-button>
+        `;
+      },
+    );
+  }
+
+  _renderChartSection() {
+    return html`
+      <div class="chart-section">
+        <div class="chart-header">
+          <button class="nav-btn" id="prev-day" @click=${() => this._changeDay(-1)}>&#9664;</button>
+          <div class="day-label" id="day-label">${dayLabel(this._dayOffset)}</div>
+          <button class="nav-btn" id="next-day" ?disabled=${this._dayOffset >= 0} @click=${() => this._changeDay(1)}>
+            &#9654;
+          </button>
+        </div>
+        <div class="usage-section">
+          <div id="usage-body">${this._renderUsageBody()}</div>
+        </div>
+        <div class="chart-area" id="chart-area">${this._renderChartArea()}</div>
+      </div>
+    `;
+  }
+
+  // The total_use/last_used_by reconstruction drives the chart, the Usage
+  // line, and Analytics -- `visits` here is every visit with a resolved
+  // identity (a configured cat, or the Unknown pseudo-cat), which is all of
+  // them except a visit from before any identity was ever recorded
+  // (cat: null, vanishingly rare -- the very first visit ever).
+  _visits() {
+    return (this._chartVisits || []).filter((v) => v.cat).sort((a, b) => a.ts - b.ts);
   }
 
   _renderChartArea() {
-    if (!this._built) return;
-    const dayLabelEl = this.shadowRoot.getElementById('day-label');
-    if (dayLabelEl) dayLabelEl.textContent = dayLabel(this._dayOffset);
-    const nextBtn = /** @type {HTMLButtonElement|null} */ (this.shadowRoot.getElementById('next-day'));
-    if (nextBtn) nextBtn.disabled = this._dayOffset >= 0;
-
-    // `area`/`usageBody` (chart-section, gated by `show_history`) and
-    // `recordsList` (records-section, gated by `show_working_records`) are
-    // independently optional -- neither element existing is reason to skip
-    // the other, so each is guarded on its own below rather than one bailing
-    // out the whole function.
-    const area = this.shadowRoot.getElementById('chart-area');
-    const recordsList = this.shadowRoot.getElementById('records-list');
-    const usageBody = this.shadowRoot.getElementById('usage-body');
-
-    // Deliberately no "Loading…" interstitial: clearing the chart/usage/
-    // records content to a placeholder and back on every fetch caused a
-    // visible flicker when paging through days quickly (the fetch usually
-    // resolves faster than a human can perceive a placeholder frame as
-    // anything but a flash). Instead, leave whatever's already on screen
-    // alone until the new data actually arrives, then swap it in directly.
-    if (this._loadingChart) return;
-
-    const cfg = this._config;
-    // The total_use/last_used_by reconstruction drives the chart, the Usage
-    // line, and Analytics -- `visits` here is every visit with a resolved
-    // identity (a configured cat, or the Unknown pseudo-cat), which is all
-    // of them except a visit from before any identity was ever recorded
-    // (cat: null, vanishingly rare -- the very first visit ever). Working
-    // Records is intentionally NOT built from this data at all; see its own
-    // comment below for why.
-    const visits = (this._chartVisits || []).filter((v) => v.cat).sort((a, b) => a.ts - b.ts);
-
-    if (area) {
-    // Chart: 0-24h stem plot
+    const visits = this._visits();
     const width = CHART_WIDTH;
     const height = CHART_HEIGHT;
     const padding = CHART_PADDING;
@@ -713,143 +702,141 @@ export class PetkitPuramaxCard extends HTMLElement {
     const { xFor, yFor } = buildScales({ dayStart: start, niceMax, width, height, padding });
     const { vertical, horizontal } = buildGridLines({ niceMax, yStep, width, height, padding });
 
-    // Gridlines only -- tick label *text* lives in HTML overlays below, not
-    // in the SVG (see the axis label overlay comment above `area.innerHTML`
-    // and issue #5: SVG text font-size is in viewBox user-units, not real
-    // CSS px, so it can't be given a stable on-screen size).
-    const vGridLines = vertical
-      .map((v) => `<line x1="${v.x}" y1="${padding.top}" x2="${v.x}" y2="${height - padding.bottom}" class="grid-line-v" />`)
-      .join('');
-
-    const hGridLines = horizontal
-      .map((h) => `<line x1="${padding.left}" y1="${h.y}" x2="${width - padding.right}" y2="${h.y}" class="grid-line-h" />`)
-      .join('');
-
     // Axis tick labels as absolutely-positioned HTML overlays inside
-    // `.chart-wrap`, positioned as a percentage of the wrap's box computed
-    // from the same viewBox coordinates the SVG uses. This works because
-    // `.chart-wrap`'s rendered box exactly matches the SVG's box (same
-    // aspect ratio, width:100%) -- see `.chart-svg`'s height:auto comment in
-    // the stylesheet. Real, fixed CSS font-size (`.axis-label`/
-    // `.axis-label-y` in the stylesheet) means these no longer grow/shrink
-    // with card width the way SVG-text font-size did.
+    // .chart-wrap, positioned as a percentage of the wrap's box computed
+    // from the same viewBox coordinates the SVG uses -- NOT SVG text (see
+    // petkit-puramax-card.const.js's CHART_PADDING comment for why: a real,
+    // fixed CSS font-size here means the on-screen text size no longer
+    // depends on the SVG viewBox's scale factor at the card's current
+    // rendered width).
     const xAxisLabelTop = ((height - padding.bottom) / height) * 100;
-    const xAxisLabels = vertical
-      .map((v) => `<div class="axis-label" style="left:${(v.x / width) * 100}%;top:${xAxisLabelTop}%">${v.label}</div>`)
-      .join('');
-
-    // width here is derived from the SAME padding.left the SVG plot itself
-    // uses for its left inset (see the .axis-label-y comment in the
-    // stylesheet for why this -- not a fixed CSS px -- is what keeps a
-    // stem at/near hour 0 from rendering under this label's text).
     const yAxisLabelWidth = (padding.left / width) * 100;
-    const yAxisLabels = horizontal
-      .map((h) => `<div class="axis-label-y" style="top:${(h.y / height) * 100}%;width:${yAxisLabelWidth}%">${h.label}</div>`)
-      .join('');
 
-    const stems = visits
-      .map((v, i) => {
-        const x = xFor(v.ts);
-        const y = yFor(v.duration);
-        const bottom = height - padding.bottom;
-        const stemColor = resolveCssColor(v.cat.color);
-        return `<line x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="${stemColor}" stroke-width="2" />
-              <circle class="visit-point" cx="${x}" cy="${y}" r="5" fill="${stemColor}" />
-              <line class="visit-hit" data-idx="${i}" x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="transparent" stroke-width="16" />`;
-      })
-      .join('');
-
-    area.innerHTML = `
+    return html`
       <div class="chart-wrap">
         <svg viewBox="0 0 ${width} ${height}" class="chart-svg">
-          ${hGridLines}
-          ${vGridLines}
-          ${stems || ''}
+          ${horizontal.map(
+            (h) => svg`<line x1="${padding.left}" y1="${h.y}" x2="${width - padding.right}" y2="${h.y}" class="grid-line-h" />`,
+          )}
+          ${vertical.map(
+            (v) => svg`<line x1="${v.x}" y1="${padding.top}" x2="${v.x}" y2="${height - padding.bottom}" class="grid-line-v" />`,
+          )}
+          ${visits.map((v, i) => {
+            const x = xFor(v.ts);
+            const y = yFor(v.duration);
+            const bottom = height - padding.bottom;
+            const stemColor = resolveCssColor(v.cat.color);
+            return svg`
+              <line x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="${stemColor}" stroke-width="2" />
+              <circle class="visit-point" cx="${x}" cy="${y}" r="5" fill="${stemColor}" />
+              <line class="visit-hit" data-idx="${i}" x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="transparent" stroke-width="16"
+                @mouseenter=${(ev) => this._showChartTooltip(ev, v)}
+                @mouseleave=${() => this._hideChartTooltip()}
+              />
+            `;
+          })}
         </svg>
-        ${xAxisLabels}
-        ${yAxisLabels}
+        ${vertical.map(
+          (v) => html`<div class="axis-label" style="left:${(v.x / width) * 100}%;top:${xAxisLabelTop}%">${v.label}</div>`,
+        )}
+        ${horizontal.map(
+          (h) => html`<div class="axis-label-y" style="top:${(h.y / height) * 100}%;width:${yAxisLabelWidth}%">${h.label}</div>`,
+        )}
         <div class="chart-tooltip" id="chart-tooltip"></div>
       </div>
-      ${visits.length === 0 ? '<div class="empty-note">No visits recorded this day</div>' : ''}
+      ${visits.length === 0 ? html`<div class="empty-note">No visits recorded this day</div>` : nothing}
     `;
+  }
 
+  // Positions at the top of the stem (the dot), regardless of where along
+  // the line was hovered. Imperative (not reactive state) on purpose: a
+  // transient hover effect doesn't need to survive a re-render, and
+  // querying the already-rendered tooltip node directly avoids plumbing
+  // hover state through a reactive property for no benefit.
+  _showChartTooltip(ev, v) {
     const tooltip = this.shadowRoot.getElementById('chart-tooltip');
-    const chartWrap = area.querySelector('.chart-wrap');
-    const visitHits = /** @type {NodeListOf<HTMLElement>} */ (area.querySelectorAll('.visit-hit'));
-    visitHits.forEach((el) => {
-      el.addEventListener('mouseenter', () => {
-        const v = visits[parseInt(el.dataset.idx, 10)];
-        const timeStr = new Date(v.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-        tooltip.textContent = `${timeStr} · ${v.cat.name} · ${formatDuration(v.duration)}`;
-        // position at the top of the stem (the dot), regardless of where along the line was hovered
-        const hitRect = el.getBoundingClientRect();
-        const wrapRect = chartWrap.getBoundingClientRect();
-        tooltip.style.left = `${hitRect.left - wrapRect.left + hitRect.width / 2}px`;
-        tooltip.style.top = `${hitRect.top - wrapRect.top}px`;
-        tooltip.classList.add('visible');
-      });
-      el.addEventListener('mouseleave', () => {
-        tooltip.classList.remove('visible');
-      });
+    if (!tooltip) return;
+    const timeStr = new Date(v.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    tooltip.textContent = `${timeStr} · ${v.cat.name} · ${formatDuration(v.duration)}`;
+    const hitRect = ev.currentTarget.getBoundingClientRect();
+    const wrapRect = this.shadowRoot.querySelector('.chart-wrap').getBoundingClientRect();
+    tooltip.style.left = `${hitRect.left - wrapRect.left + hitRect.width / 2}px`;
+    tooltip.style.top = `${hitRect.top - wrapRect.top}px`;
+    tooltip.classList.add('visible');
+  }
+
+  _hideChartTooltip() {
+    const tooltip = this.shadowRoot.getElementById('chart-tooltip');
+    if (tooltip) tooltip.classList.remove('visible');
+  }
+
+  // Driven by the SAME data as the chart (`_visits()`), so it always
+  // matches the day currently shown (not a separate live device sensor).
+  // `visits` already includes Unknown (it has a real `.color`/`.name`, just
+  // not one of `cfg.cats`, so it also plots as a gray stem on the chart) --
+  // but the usage-line "legend" row is built only from `cfg.cats` PLUS an
+  // Unknown entry that's added only when this day actually had one (never a
+  // permanent zero-count slot).
+  _renderUsageBody() {
+    const cfg = this._config;
+    const visits = this._visits();
+    const perCat = {};
+    cfg.cats.forEach((cat) => {
+      perCat[cat.name] = { count: 0 };
     });
-    }
-
-    // Usage section: driven by the SAME data as the chart (`visits`, above),
-    // so it always matches the day currently shown (not a separate live
-    // device sensor). `visits` already includes Unknown (it has a real
-    // `.color`/`.name`, just not one of `cfg.cats`, so it also plots as a
-    // gray stem on the chart above) -- but the usage-line "legend" row is
-    // built only from `cfg.cats` PLUS an Unknown entry that's added only
-    // when this day actually had one (never a permanent zero-count slot).
-    if (usageBody) {
-      const perCat = {};
-      cfg.cats.forEach((cat) => {
-        perCat[cat.name] = { count: 0 };
-      });
-      let unknownCount = 0;
-      let unknownColor = DEFAULT_UNKNOWN_CAT_COLOR;
-      visits.forEach((v) => {
-        if (v.cat.name === UNKNOWN_CAT_LABEL) {
-          unknownCount += 1;
-          unknownColor = v.cat.color;
-        } else {
-          perCat[v.cat.name].count += 1;
-        }
-      });
-      const totalCount = visits.length;
-      const catLine =
-        cfg.cats
-          .map((cat) => {
-            const p = perCat[cat.name];
-            return `<span class="usage-cat"><span class="dot" style="background:${resolveCssColor(cat.color)}"></span>${cat.name}: ${p.count}</span>`;
-          })
-          .join('') +
-        (unknownCount > 0
-          ? `<span class="usage-cat"><span class="dot" style="background:${resolveCssColor(unknownColor)}"></span>${UNKNOWN_CAT_LABEL}: ${unknownCount}</span>`
-          : '');
-      usageBody.innerHTML = `
-        <div class="usage-row">
-          <div class="stat-value">${totalCount} time${totalCount === 1 ? '' : 's'}</div>
-          <div class="usage-cats">${catLine}</div>
+    let unknownCount = 0;
+    let unknownColor = DEFAULT_UNKNOWN_CAT_COLOR;
+    visits.forEach((v) => {
+      if (v.cat.name === UNKNOWN_CAT_LABEL) {
+        unknownCount += 1;
+        unknownColor = v.cat.color;
+      } else {
+        perCat[v.cat.name].count += 1;
+      }
+    });
+    const totalCount = visits.length;
+    return html`
+      <div class="usage-row">
+        <div class="stat-value">${totalCount} time${totalCount === 1 ? '' : 's'}</div>
+        <div class="usage-cats">
+          ${cfg.cats.map(
+            (cat) => html`
+              <span class="usage-cat"
+                ><span class="dot" style="background:${resolveCssColor(cat.color)}"></span>${cat.name}: ${perCat[cat.name].count}</span
+              >
+            `,
+          )}
+          ${unknownCount > 0
+            ? html`<span class="usage-cat"
+                ><span class="dot" style="background:${resolveCssColor(unknownColor)}"></span>${UNKNOWN_CAT_LABEL}: ${unknownCount}</span
+              >`
+            : nothing}
         </div>
-      `;
-    }
+      </div>
+    `;
+  }
 
-    // Working Records has exactly ONE source of truth, and it's `last_event`
-    // -- rendered VERBATIM, never a computed re-phrasing and never
-    // interpreted through a pattern/regex. Every row PETKIT reports is
-    // shown, in the exact words it used, in arrival order; the only
-    // filtering is an explicit, configurable list of raw values to hide
-    // entirely (`event_exclude`) -- no guessing at "is this a duplicate" or
-    // "is this a visit." There is also deliberately no cross-reference back
-    // to the total_use/last_used_by reconstruction that drives the chart/
-    // usage/analytics above: merging two independently-computed views of
-    // "what happened" and reconciling them with dedupe logic is exactly
-    // what caused a string of real bugs before (see git history / issues
-    // #13, #14, #16) -- a single, unmodified stream has no reconciliation
-    // to get wrong. Trade-off accepted: a Working Records visit row carries
-    // no duration (that's still visible via the chart tooltip and the
-    // Usage section above).
+  // Merges any config-provided `event_labels` over the PURAMAX firmware
+  // defaults (config wins), so a different device/firmware vocabulary can
+  // be supported purely via config, with no card changes.
+  _eventLabels() {
+    return { ...DEFAULT_EVENT_LABELS, ...(this._config.event_labels || {}) };
+  }
+
+  // Working Records has exactly ONE source of truth, and it's `last_event`
+  // -- rendered VERBATIM, never a computed re-phrasing and never
+  // interpreted through a pattern/regex. Every row PETKIT reports is shown,
+  // in the exact words it used, in arrival order; the only filtering is an
+  // explicit, configurable list of raw values to hide entirely
+  // (`event_exclude`) -- no guessing at "is this a duplicate" or "is this a
+  // visit." There is also deliberately no cross-reference back to the
+  // total_use/last_used_by reconstruction that drives the chart/usage/
+  // analytics: merging two independently-computed views of "what happened"
+  // and reconciling them with dedupe logic is exactly what caused a string
+  // of real bugs before (see git history / issues #13, #14, #16) -- a
+  // single, unmodified stream has no reconciliation to get wrong.
+  _renderRecordsSection() {
+    const cfg = this._config;
     const eventHist = this._chartEventHist || [];
     const eventLabels = this._eventLabels();
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
@@ -863,86 +850,86 @@ export class PetkitPuramaxCard extends HTMLElement {
       .filter(Boolean);
     records.sort((a, b) => b.ts - a.ts);
 
-    if (recordsList) {
-      if (records.length === 0) {
-        recordsList.innerHTML = '<div class="empty-note">No records for this day</div>';
-      } else {
-        recordsList.innerHTML = records
-          .map(
-            (r) => `
-          <div class="record-row">
-            <div class="record-time">${new Date(r.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</div>
-            <ha-icon icon="${escapeHtml(r.icon)}" style="color:${escapeHtml(r.color)}"></ha-icon>
-            <div class="record-text">${escapeHtml(r.text)}</div>
-          </div>
-        `,
-          )
-          .join('');
-      }
-    }
+    return html`
+      <div class="records-section">
+        <div class="section-title">Working Records</div>
+        <div class="records-list" id="records-list">
+          ${records.length === 0
+            ? html`<div class="empty-note">No records for this day</div>`
+            : records.map(
+                (r) => html`
+                  <div class="record-row">
+                    <div class="record-time">${new Date(r.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</div>
+                    <ha-icon icon=${r.icon} style="color:${r.color}"></ha-icon>
+                    <div class="record-text">${r.text}</div>
+                  </div>
+                `,
+              )}
+        </div>
+      </div>
+    `;
   }
 
-  // Merges any config-provided `event_labels` over the PURAMAX firmware
-  // defaults (config wins), so a different device/firmware vocabulary can
-  // be supported purely via config, with no card changes.
-  _eventLabels() {
-    return { ...DEFAULT_EVENT_LABELS, ...(this._config.event_labels || {}) };
-  }
-
-  _renderAnalyticsArea() {
-    if (!this._built) return;
-    const grid = this.shadowRoot.getElementById('analytics-grid');
-    const banner = this.shadowRoot.getElementById('decline-banner');
-    const noVisitBanner = this.shadowRoot.getElementById('no-visit-banner');
-    if (!grid) return;
-    // Same no-flicker rationale as _renderChartArea (see its comment): keep
-    // whatever's already rendered until fresh analytics resolve. On first
-    // mount that just means the grid stays empty for a moment, which reads
-    // as a normal load rather than a flashing placeholder.
-    if (this._loadingAnalytics || !this._analytics) return;
+  _renderAnalyticsSection() {
+    if (!this._analytics) return nothing;
     const cfg = this._config;
     const threshold = (cfg.decline_threshold_pct || DEFAULT_DECLINE_THRESHOLD_PCT) / 100;
     const warnings = [];
-    grid.innerHTML = cfg.cats
-      .map((cat) => {
-        const a = this._analytics[cat.name] || {};
-        if (a.daysOfHistory >= 3 && a.avg7dTotal && new Date().getHours() >= 18) {
-          if (a.todayTotal < threshold * a.avg7dTotal) {
-            warnings.push(`${cat.name}'s usage today is well below their recent average — worth a check.`);
-          } else if (a.todayTotal > (2 - threshold) * a.avg7dTotal) {
-            warnings.push(`${cat.name}'s usage today is well above their recent average — worth a check.`);
-          }
+    const catTables = cfg.cats.map((cat) => {
+      const a = this._analytics[cat.name] || {};
+      if (a.daysOfHistory >= 3 && a.avg7dTotal && new Date().getHours() >= 18) {
+        if (a.todayTotal < threshold * a.avg7dTotal) {
+          warnings.push(`${cat.name}'s usage today is well below their recent average — worth a check.`);
+        } else if (a.todayTotal > (2 - threshold) * a.avg7dTotal) {
+          warnings.push(`${cat.name}'s usage today is well above their recent average — worth a check.`);
         }
-        return `
+      }
+      return html`
         <div class="cat-analytics">
           <table>
             <colgroup>
               <col class="col-name" /><col class="col-stat" /><col class="col-stat" /><col class="col-stat" />
             </colgroup>
-            <tr><td class="cat-name-cell"><span class="dot" style="background:${escapeHtml(resolveCssColor(cat.color))}"></span>${escapeHtml(cat.name)}</td><td>Today</td><td>3d avg</td><td>7d avg</td></tr>
-            <tr><td>Visits</td><td>${a.todayCount ?? 0}</td><td>${a.avg3dVisits !== null && a.avg3dVisits !== undefined ? a.avg3dVisits.toFixed(1) : '—'}</td><td>${a.avg7dVisits !== null && a.avg7dVisits !== undefined ? a.avg7dVisits.toFixed(1) : '—'}</td></tr>
-            <tr><td>Duration</td><td>${a.todayAvgDuration ? formatDuration(a.todayAvgDuration) : '—'}</td><td>${a.avg3dDuration ? formatDuration(a.avg3dDuration) : '—'}</td><td>${a.avg7dDuration ? formatDuration(a.avg7dDuration) : '—'}</td></tr>
+            <tr>
+              <td class="cat-name-cell"><span class="dot" style="background:${resolveCssColor(cat.color)}"></span>${cat.name}</td>
+              <td>Today</td>
+              <td>3d avg</td>
+              <td>7d avg</td>
+            </tr>
+            <tr>
+              <td>Visits</td>
+              <td>${a.todayCount ?? 0}</td>
+              <td>${a.avg3dVisits !== null && a.avg3dVisits !== undefined ? a.avg3dVisits.toFixed(1) : '—'}</td>
+              <td>${a.avg7dVisits !== null && a.avg7dVisits !== undefined ? a.avg7dVisits.toFixed(1) : '—'}</td>
+            </tr>
+            <tr>
+              <td>Duration</td>
+              <td>${a.todayAvgDuration ? formatDuration(a.todayAvgDuration) : '—'}</td>
+              <td>${a.avg3dDuration ? formatDuration(a.avg3dDuration) : '—'}</td>
+              <td>${a.avg7dDuration ? formatDuration(a.avg7dDuration) : '—'}</td>
+            </tr>
           </table>
         </div>
       `;
-      })
-      .join('');
-    if (banner) {
-      banner.innerHTML = warnings.length
-        ? warnings.map((w) => `<div class="warn-banner"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>${w}</div>`).join('')
-        : '';
-    }
-    if (noVisitBanner) {
-      const overdueCats = cfg.cats.filter((cat) => this._analytics[cat.name]?.noVisitAlert?.alerting);
-      noVisitBanner.innerHTML = overdueCats.length
-        ? overdueCats
-            .map((cat) => {
-              const { hoursSince } = this._analytics[cat.name].noVisitAlert;
-              const since = hoursSince == null ? 'no visits recorded yet' : `last seen ${formatHoursAgo(hoursSince)} ago`;
-              return `<div class="no-visit-banner"><ha-icon icon="mdi:cat-alert"></ha-icon>${escapeHtml(cat.name)} hasn't used the litter box recently (${escapeHtml(since)}).</div>`;
-            })
-            .join('')
-        : '';
-    }
+    });
+
+    const overdueCats = cfg.cats.filter((cat) => this._analytics[cat.name]?.noVisitAlert?.alerting);
+
+    return html`
+      <div class="analytics-section">
+        <div class="section-title">Analytics</div>
+        <div id="no-visit-banner">
+          ${overdueCats.map((cat) => {
+            const { hoursSince } = this._analytics[cat.name].noVisitAlert;
+            const since = hoursSince == null ? 'no visits recorded yet' : `last seen ${formatHoursAgo(hoursSince)} ago`;
+            return html`<div class="no-visit-banner"><ha-icon icon="mdi:cat-alert"></ha-icon>${cat.name} hasn't used the litter box recently (${since}).</div>`;
+          })}
+        </div>
+        <div id="decline-banner">
+          ${warnings.map((w) => html`<div class="warn-banner"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>${w}</div>`)}
+        </div>
+        <div class="analytics-grid" id="analytics-grid">${catTables}</div>
+      </div>
+    `;
   }
 }

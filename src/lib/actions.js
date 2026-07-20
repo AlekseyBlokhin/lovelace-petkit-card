@@ -28,6 +28,55 @@
 
 import { fireMoreInfo, callService } from './ha-helpers.js';
 
+// Matches home-assistant/frontend's own `STATES_OFF` (`src/common/const.ts`).
+const STATES_OFF = ['closed', 'locked', 'off'];
+
+/**
+ * Mirrors HA frontend's own `toggleEntity()`/`turnOnOffEntity()`
+ * (`src/panels/lovelace/common/entity/toggle-entity.ts` +
+ * `turn-on-off-entity.ts`) -- calls the entity's domain-specific service
+ * directly, the same way a native HA card's `tap_action: toggle` does.
+ * Deliberately NOT the generic backend `homeassistant.toggle` service: that
+ * service (`homeassistant/components/homeassistant/__init__.py`,
+ * `async_handle_turn_service`) only forwards to a domain if the domain has
+ * literally registered a service named `toggle`, which most domains --
+ * including `button`, used by several of this card's default controls --
+ * never do, so calling it against those entities silently no-ops (a
+ * backend warning log, no actual action) even though the exact same
+ * `{action: 'toggle'}` config works from a native HA card.
+ *
+ * @param {any} hass
+ * @param {string} entityId
+ */
+function toggleEntity(hass, entityId) {
+  const domain = entityId.split('.', 1)[0];
+  const serviceDomain = domain === 'group' ? 'homeassistant' : domain;
+  const stateObj = hass.states[entityId];
+  const turnOn = !stateObj || STATES_OFF.includes(stateObj.state);
+  let service;
+  switch (domain) {
+    case 'lock':
+      service = turnOn ? 'unlock' : 'lock';
+      break;
+    case 'cover':
+      service = turnOn ? 'open_cover' : 'close_cover';
+      break;
+    case 'button':
+    case 'input_button':
+      service = 'press';
+      break;
+    case 'scene':
+      service = 'turn_on';
+      break;
+    case 'valve':
+      service = turnOn ? 'open_valve' : 'close_valve';
+      break;
+    default:
+      service = turnOn ? 'turn_on' : 'turn_off';
+  }
+  callService(hass, serviceDomain, service, { entity_id: entityId });
+}
+
 /**
  * @param {any} hass
  * @param {ActionConfig} [actionConfig]
@@ -64,7 +113,7 @@ export function runAction(el, hass, actionConfig, fallbackEntity) {
     }
     case 'toggle': {
       const entityId = config.entity || fallbackEntity;
-      if (entityId) callService(hass, 'homeassistant', 'toggle', { entity_id: entityId });
+      if (entityId) toggleEntity(hass, entityId);
       return;
     }
     case 'perform-action':

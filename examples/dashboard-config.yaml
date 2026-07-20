@@ -63,38 +63,36 @@ info_row:
 # tap_action/hold_action/double_tap_action use the same native action
 # config every built-in card's interactions do -- perform-action/toggle/
 # navigate/url/more-info/none, each with an optional native `confirmation`
-# dialog. A device with a pair of buttons that only make sense in one state
-# at a time (like Start/Exit Maintenance here) is just two ordinary rows,
-# each gated by its own `visibility` condition, rather than one button with
-# special-cased behavior -- together they read as a single control that
-# changes what it shows depending on the device's current state.
+# dialog. `toggle` is the natural choice for a `button.*` entity too: HA's
+# own frontend special-cases the button domain to call its `press` service
+# directly (there's no on/off state to toggle), so it's simpler than -- and
+# exactly as correct as -- spelling out perform-action/button.press/target
+# by hand; reach for perform-action instead when you need to call a
+# specific service that isn't just "this entity's own default action" (e.g.
+# a different entity/domain than the one the row displays). A device with a
+# pair of buttons that only make sense in one state at a time (like
+# Start/Exit Maintenance here) is just two ordinary rows, each gated by its
+# own `visibility` condition, rather than one button with special-cased
+# behavior -- together they read as a single control that changes what it
+# shows depending on the device's current state.
 controls_row:
   - name: Clean now
     icon: mdi:broom
     entity: button.petkit_puramax_clean
     tap_action:
-      action: perform-action
-      perform_action: button.press
-      target:
-        entity_id: button.petkit_puramax_clean
+      action: toggle
   - name: Odor removal
     icon: mdi:spray-bottle
     entity: button.petkit_puramax_odor_removal
     tap_action:
-      action: perform-action
-      perform_action: button.press
-      target:
-        entity_id: button.petkit_puramax_odor_removal
+      action: toggle
       confirmation:
         text: Run a manual odor removal cycle now?
   - name: Start Maintenance
     icon: mdi:wrench
     entity: button.petkit_puramax_maintenance_start
     tap_action:
-      action: perform-action
-      perform_action: button.press
-      target:
-        entity_id: button.petkit_puramax_maintenance_start
+      action: toggle
     visibility:
       - condition: state
         entity: sensor.petkit_puramax_state
@@ -103,10 +101,7 @@ controls_row:
     icon: mdi:wrench
     entity: button.petkit_puramax_maintenance_exit
     tap_action:
-      action: perform-action
-      perform_action: button.press
-      target:
-        entity_id: button.petkit_puramax_maintenance_exit
+      action: toggle
     visibility:
       - condition: state
         entity: sensor.petkit_puramax_state

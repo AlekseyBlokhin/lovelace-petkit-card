@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runAction, bindActionHandlers } from '../../src/lib/actions.js';
 
-function makeHass() {
-  return { callService: vi.fn(), user: { id: 'user1' } };
+function makeHass(states = {}) {
+  return { callService: vi.fn(), user: { id: 'user1' }, states };
 }
 
 function makeEl() {
@@ -27,10 +27,50 @@ describe('runAction', () => {
     expect(listener.mock.calls[0][0].detail).toEqual({ entityId: 'sensor.explicit' });
   });
 
-  it('toggle: calls homeassistant.toggle on the target entity', () => {
-    const hass = makeHass();
+  it('toggle: calls the domain\'s own turn_on/turn_off directly, not the generic homeassistant.toggle service', () => {
+    // Mirrors HA frontend's own toggleEntity()/turnOnOffEntity() -- NOT the
+    // backend homeassistant.toggle service, which only forwards to a domain
+    // that has literally registered a service named "toggle" (most domains,
+    // including button, never do -- see the domain-specific cases below).
+    const hass = makeHass({ 'switch.x': { state: 'off' } });
     runAction(makeEl(), hass, { action: 'toggle' }, 'switch.x');
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.x' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.x' });
+  });
+
+  it('toggle: reads the entity\'s own current state to decide on vs off', () => {
+    const hass = makeHass({ 'switch.x': { state: 'on' } });
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'switch.x' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_off', { entity_id: 'switch.x' });
+  });
+
+  it('toggle: treats a missing/unknown state the same as off (turns on)', () => {
+    const hass = makeHass();
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'switch.unknown' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.unknown' });
+  });
+
+  it('toggle: a button entity always presses, regardless of state (no on/off concept)', () => {
+    const hass = makeHass();
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'button.dump_litter' });
+    expect(hass.callService).toHaveBeenCalledWith('button', 'press', { entity_id: 'button.dump_litter' });
+  });
+
+  it('toggle: an input_button entity also presses', () => {
+    const hass = makeHass();
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'input_button.reset' });
+    expect(hass.callService).toHaveBeenCalledWith('input_button', 'press', { entity_id: 'input_button.reset' });
+  });
+
+  it('toggle: a lock entity calls lock/unlock instead of turn_on/turn_off', () => {
+    const hass = makeHass({ 'lock.front_door': { state: 'locked' } });
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'lock.front_door' });
+    expect(hass.callService).toHaveBeenCalledWith('lock', 'unlock', { entity_id: 'lock.front_door' });
+  });
+
+  it('toggle: a cover entity calls open_cover/close_cover', () => {
+    const hass = makeHass({ 'cover.blinds': { state: 'closed' } });
+    runAction(makeEl(), hass, { action: 'toggle', entity: 'cover.blinds' });
+    expect(hass.callService).toHaveBeenCalledWith('cover', 'open_cover', { entity_id: 'cover.blinds' });
   });
 
   it('perform-action: splits the domain.service and merges data + target', () => {
@@ -68,7 +108,7 @@ describe('runAction', () => {
     const hass = makeHass();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     runAction(makeEl(), hass, { action: 'toggle', entity: 'switch.x', confirmation: { text: 'Sure?' } });
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.x' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.x' });
     vi.restoreAllMocks();
   });
 
@@ -105,7 +145,7 @@ describe('bindActionHandlers', () => {
     const el = makeEl();
     bindActionHandlers(el, () => ({ hass, tapAction: { action: 'toggle', entity: 'switch.x' } }));
     click(el);
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.x' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.x' });
   });
 
   it('holding past the threshold runs holdAction instead of tapAction', () => {
@@ -119,8 +159,8 @@ describe('bindActionHandlers', () => {
     el.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     vi.advanceTimersByTime(600);
     el.dispatchEvent(new Event('click', { bubbles: true }));
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.hold' });
-    expect(hass.callService).not.toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.tap' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.hold' });
+    expect(hass.callService).not.toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.tap' });
   });
 
   it('a quick tap (below the hold threshold) with holdAction configured still runs tapAction', () => {
@@ -132,7 +172,7 @@ describe('bindActionHandlers', () => {
       holdAction: { action: 'toggle', entity: 'switch.hold' },
     }));
     click(el);
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.tap' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.tap' });
   });
 
   it('two quick taps run doubleTapAction instead of two tapActions', () => {
@@ -145,8 +185,8 @@ describe('bindActionHandlers', () => {
     }));
     click(el);
     click(el);
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.double' });
-    expect(hass.callService).not.toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.tap' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.double' });
+    expect(hass.callService).not.toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.tap' });
   });
 
   it('a single tap with doubleTapAction configured still eventually runs tapAction, after the wait window', () => {
@@ -160,7 +200,7 @@ describe('bindActionHandlers', () => {
     click(el);
     expect(hass.callService).not.toHaveBeenCalled();
     vi.advanceTimersByTime(300);
-    expect(hass.callService).toHaveBeenCalledWith('homeassistant', 'toggle', { entity_id: 'switch.tap' });
+    expect(hass.callService).toHaveBeenCalledWith('switch', 'turn_on', { entity_id: 'switch.tap' });
   });
 
   it('reads getConfig fresh on every interaction, not a stale snapshot', () => {
@@ -171,7 +211,7 @@ describe('bindActionHandlers', () => {
     click(el);
     entity = 'switch.second';
     click(el);
-    expect(hass.callService).toHaveBeenNthCalledWith(1, 'homeassistant', 'toggle', { entity_id: 'switch.first' });
-    expect(hass.callService).toHaveBeenNthCalledWith(2, 'homeassistant', 'toggle', { entity_id: 'switch.second' });
+    expect(hass.callService).toHaveBeenNthCalledWith(1, 'switch', 'turn_on', { entity_id: 'switch.first' });
+    expect(hass.callService).toHaveBeenNthCalledWith(2, 'switch', 'turn_on', { entity_id: 'switch.second' });
   });
 });
