@@ -30,13 +30,21 @@ event_labels:
   manual_odor_completed: Manual odor removal done
   auto_cleaning_completed: Auto cleaning done
 
+# Every section below defaults to shown; set any of these to false to hide it.
+# show_state: true
+# show_history: true
+# show_working_records: true
+# show_analytics: true
+
 cats:
   # name must exactly match this cat's value as reported by
-  # device_entities.last_used_by.
+  # device_entities.last_used_by. color accepts a raw CSS color (hex, as
+  # here) or a named HA palette color like "blue"/"deep-orange" (what the
+  # visual editor's color picker writes when you pick a swatch).
   - name: Whiskers
     color: "#4fc3f7"
   - name: Mittens
-    color: "#ff8a65"
+    color: "deep-orange"
 
 info_row:
   - entity: sensor.petkit_puramax_consumable_remaining

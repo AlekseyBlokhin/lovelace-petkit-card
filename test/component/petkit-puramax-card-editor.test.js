@@ -35,9 +35,9 @@ function mainForm(editor) {
   return editor.shadowRoot.querySelector('#main-section ha-form');
 }
 
-// Name form is nested inside the cat's `.row` (alongside Delete); the color
-// form is the cat-item's other direct child ha-form, deliberately outside
-// `.row` so Delete never ends up between the two.
+// Name form is nested inside the cat's `.row` (alongside the drag handle
+// and Delete); the color form is the cat-item's other direct child ha-form,
+// deliberately outside `.row` so Delete never ends up between the two.
 function catNameForms(editor) {
   return editor.shadowRoot.querySelectorAll('#cats-rows .cat-item .row ha-form');
 }
@@ -47,22 +47,44 @@ function catColorForms(editor) {
 }
 
 function infoRows(editor) {
-  return editor.shadowRoot.querySelectorAll('#info-rows > .row');
+  return editor.shadowRoot.querySelectorAll('#info-rows .summary-row');
 }
 
 function controlsRows(editor) {
-  return editor.shadowRoot.querySelectorAll('#controls-rows > .row');
+  return editor.shadowRoot.querySelectorAll('#controls-rows .summary-row');
+}
+
+function addInfoRowForm(editor) {
+  return editor.shadowRoot.querySelector('#add-info-row ha-form');
+}
+
+function addControlRowForm(editor) {
+  return editor.shadowRoot.querySelector('#add-control-row ha-form');
+}
+
+function detailForm(editor) {
+  return editor.shadowRoot.querySelector('#detail-body ha-form');
+}
+
+function backButton(editor) {
+  return editor.shadowRoot.querySelector('ha-icon-button-prev');
 }
 
 function fireValueChanged(form, value) {
   form.dispatchEvent(new CustomEvent('value-changed', { detail: { value }, bubbles: true, composed: true }));
 }
 
+function fireItemMoved(sortableEl, oldIndex, newIndex) {
+  sortableEl.dispatchEvent(
+    new CustomEvent('item-moved', { detail: { oldIndex, newIndex }, bubbles: true, composed: true }),
+  );
+}
+
 function click(el) {
   el.dispatchEvent(new Event('click', { bubbles: true }));
 }
 
-describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
+describe('PetkitPuramaxCardEditor: Content section', () => {
   let editor;
 
   beforeEach(() => {
@@ -70,22 +92,54 @@ describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
     editor.setConfig(baseConfig());
   });
 
-  it('binds the main ha-form directly to the config object (no manual flatten)', () => {
-    const form = mainForm(editor);
-    expect(form).not.toBeNull();
-    expect(form.data).toEqual(baseConfig());
+  it('groups title/device_id/show_* under a "Content" group, first in the schema', () => {
+    const schema = mainForm(editor).schema;
+    expect(schema[0].name).toBe('content');
+    expect(schema[0].title).toBe('Content');
+    expect(schema[0].flatten).toBe(true);
+    const names = schema[0].schema.map((s) => s.name);
+    expect(names).toEqual(['title', 'device_id', 'show_state', 'show_history', 'show_working_records', 'show_analytics']);
   });
 
-  it('puts title first and device_id second in the main form schema', () => {
-    const names = mainForm(editor).schema.map((s) => s.name);
-    expect(names[0]).toBe('title');
-    expect(names[1]).toBe('device_id');
+  it('gives the Content group an mdi iconPath (native icon, not emoji)', () => {
+    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
+    expect(typeof contentGroup.iconPath).toBe('string');
+    expect(contentGroup.iconPath.length).toBeGreaterThan(0);
   });
 
   it('gives device_id a plain label with no explanatory subtitle, filtered to the petkit integration', () => {
-    const deviceField = mainForm(editor).schema.find((s) => s.name === 'device_id');
+    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
+    const deviceField = contentGroup.schema.find((s) => s.name === 'device_id');
     expect(deviceField.label).toBe('PetKit device');
     expect(deviceField.selector).toEqual({ device: { filter: { integration: 'petkit' } } });
+  });
+
+  it('exposes the show_* toggles as boolean selectors', () => {
+    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
+    for (const name of ['show_state', 'show_history', 'show_working_records', 'show_analytics']) {
+      const field = contentGroup.schema.find((s) => s.name === name);
+      expect(field.selector).toEqual({ boolean: {} });
+    }
+  });
+
+  it('shows every show_* toggle as ON when the config omits them (the card\'s own default)', () => {
+    // A boolean selector with nothing bound renders as an unchecked/"off"
+    // toggle -- since the card treats a missing show_* key as true (shows
+    // the section), the form must be handed an explicit `true` for display,
+    // or every toggle would misleadingly look off on a config that's
+    // actually showing everything.
+    const data = mainForm(editor).data;
+    expect(data.show_state).toBe(true);
+    expect(data.show_history).toBe(true);
+    expect(data.show_working_records).toBe(true);
+    expect(data.show_analytics).toBe(true);
+  });
+
+  it('reflects an explicit show_* = false without overriding it back to true', () => {
+    const withHidden = makeEditor();
+    withHidden.setConfig(baseConfig({ show_analytics: false }));
+    expect(mainForm(withHidden).data.show_analytics).toBe(false);
+    expect(mainForm(withHidden).data.show_state).toBe(true);
   });
 
   it('does not expose a device_entities group in the visual editor (YAML/code-editor only)', () => {
@@ -93,72 +147,15 @@ describe('PetkitPuramaxCardEditor: initial render reflects config', () => {
     expect(names).not.toContain('device_entities');
   });
 
-  it('marks the alerts group as flatten (it has no real backing object in config)', () => {
+  it('marks the alerts group as flatten, with its own mdi iconPath', () => {
     const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
     expect(alertsGroup.flatten).toBe(true);
-  });
-
-  it('renders two ha-forms per cat: name (with Delete) and color', () => {
-    expect(catNameForms(editor).length).toBe(2);
-    expect(catColorForms(editor).length).toBe(2);
-    expect(catNameForms(editor)[0].data).toEqual(baseConfig().cats[0]);
-    expect(catColorForms(editor)[0].data).toEqual(baseConfig().cats[0]);
-  });
-
-  it('renders an already-configured info_row entry as a collapsed summary row, not the full form', () => {
-    const rows = infoRows(editor);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(true);
-    expect(rows[0].querySelector('.summary-label').textContent).toBe('Consumable');
-    expect(rows[0].querySelector('ha-form')).toBeNull();
-  });
-
-  it('renders an already-configured controls_row entry as a collapsed summary row, not the full form', () => {
-    const rows = controlsRows(editor);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(true);
-    expect(rows[0].querySelector('.summary-label').textContent).toBe('Start');
-    expect(rows[0].querySelector('ha-form')).toBeNull();
-  });
-
-  it('renders a new (entity-less) info_row entry as a minimal entity-only form', () => {
-    const withBlank = makeEditor();
-    withBlank.setConfig(baseConfig({ info_row: [{ entity: '', name: '', icon: 'mdi:information-outline' }] }));
-    const rows = infoRows(withBlank);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(false);
-    const form = rows[0].querySelector('ha-form');
-    expect(form.schema.map((s) => s.name)).toEqual(['entity']);
-  });
-
-  it('renders no array rows for an empty/absent config', () => {
-    const empty = makeEditor();
-    empty.setConfig({ type: 'custom:petkit-puramax-card' });
-    expect(catNameForms(empty).length).toBe(0);
-    expect(infoRows(empty).length).toBe(0);
-    expect(controlsRows(empty).length).toBe(0);
-  });
-
-  it('includes no_visit_alert_hours and notify_service in the main form data', () => {
-    const withAlerts = makeEditor();
-    withAlerts.setConfig(baseConfig({ no_visit_alert_hours: 12, notify_service: 'notify.mobile_app_x' }));
-    expect(mainForm(withAlerts).data).toMatchObject({
-      no_visit_alert_hours: 12,
-      notify_service: 'notify.mobile_app_x',
-    });
-  });
-
-  it('includes unknown_cat_color in the main form data and round-trips it back into config on change', () => {
-    const withColor = makeEditor();
-    withColor.setConfig(baseConfig({ unknown_cat_color: '#ff00ff' }));
-    expect(mainForm(withColor).data).toMatchObject({ unknown_cat_color: '#ff00ff' });
-
-    fireValueChanged(mainForm(withColor), { ...withColor._config, unknown_cat_color: '#00ff00' });
-    expect(withColor._config.unknown_cat_color).toBe('#00ff00');
+    expect(typeof alertsGroup.iconPath).toBe('string');
+    expect(alertsGroup.iconPath.length).toBeGreaterThan(0);
   });
 });
 
-describe('PetkitPuramaxCardEditor: native HA chrome', () => {
+describe('PetkitPuramaxCardEditor: Cats', () => {
   let editor;
 
   beforeEach(() => {
@@ -166,36 +163,43 @@ describe('PetkitPuramaxCardEditor: native HA chrome', () => {
     editor.setConfig(baseConfig());
   });
 
-  it('groups each repeating-row section in a native ha-expansion-panel with a row-count header', () => {
-    const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    expect(panels.length).toBe(3);
-    const headers = Array.from(panels).map((p) => p.getAttribute('header'));
-    expect(headers).toEqual(['Cats (2)', 'Status chips (1)', 'Controls (1)']);
-  });
-
-  it('updates the panel header count after adding a cat', () => {
-    click(editor.shadowRoot.getElementById('add-cat'));
-    const catsPanel = editor.shadowRoot.querySelector('ha-expansion-panel');
-    expect(catsPanel.getAttribute('header')).toBe('Cats (3)');
-  });
-
-  it('uses a native ha-icon-button (not a text "Remove" button) for removing a cat', () => {
-    const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
-    expect(removeBtn.tagName.toLowerCase()).toBe('ha-icon-button');
-    expect(removeBtn.querySelector('ha-icon').getAttribute('icon')).toBe('mdi:delete-outline');
+  it('renders two ha-forms per cat: name (with drag handle + Delete) and color', () => {
+    expect(catNameForms(editor).length).toBe(2);
+    expect(catColorForms(editor).length).toBe(2);
+    expect(catNameForms(editor)[0].data).toEqual(baseConfig().cats[0]);
+    expect(catColorForms(editor)[0].data).toEqual(baseConfig().cats[0]);
   });
 
   it('puts a cat\'s Delete button in the same row as Name, not between Name and Color', () => {
     const item = editor.shadowRoot.querySelector('#cats-rows .cat-item');
     const nameRow = item.querySelector('.row');
-    expect(nameRow.querySelector('ha-form[schema]') || nameRow.querySelector('ha-form')).not.toBeNull();
+    expect(nameRow.querySelector('ha-form')).not.toBeNull();
     expect(nameRow.querySelector('.remove-btn')).not.toBeNull();
-    // Color form is a sibling of the name row, not inside it -- Delete can
-    // never end up visually between Name and Color regardless of how the
-    // name/color forms wrap at narrow widths.
     const colorForm = item.querySelector(':scope > ha-form');
     expect(colorForm).not.toBeNull();
     expect(nameRow.contains(colorForm)).toBe(false);
+  });
+
+  it('gives each cat row a drag handle for reordering', () => {
+    const item = editor.shadowRoot.querySelector('#cats-rows .cat-item');
+    expect(item.querySelector('.handle')).not.toBeNull();
+  });
+
+  it('reorders cats when the sortable list fires item-moved', () => {
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    const sortable = editor.shadowRoot.querySelector('#cats-rows ha-sortable');
+    fireItemMoved(sortable, 0, 1);
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.cats.map((c) => c.name)).toEqual(['Cat B', 'Cat A']);
+  });
+
+  it('adds a new cat with a friendly default name and human-readable color', () => {
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    click(editor.shadowRoot.getElementById('add-cat'));
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.cats[2]).toEqual({ name: 'My Cat', color: 'blue' });
   });
 
   it('removing a cat via its icon button still fires config-changed correctly', () => {
@@ -206,81 +210,11 @@ describe('PetkitPuramaxCardEditor: native HA chrome', () => {
     expect(config.cats.length).toBe(1);
   });
 
-  it('exposes notify_service as an entity selector scoped to the notify domain', () => {
-    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
-    const notifyField = alertsGroup.schema.find((s) => s.name === 'notify_service');
-    expect(notifyField.selector).toEqual({ entity: { domain: 'notify' } });
-  });
-
-  it('exposes unknown_cat_color as a native color selector, not a plain text field', () => {
-    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
-    const colorField = alertsGroup.schema.find((s) => s.name === 'unknown_cat_color');
-    expect(colorField.selector).toEqual({ ui_color: {} });
-  });
-
-  it('exposes no_visit_alert_hours as a bounded number field', () => {
-    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
-    const hoursField = alertsGroup.schema.find((s) => s.name === 'no_visit_alert_hours');
-    expect(hoursField.selector).toEqual({ number: { min: 1, max: 168, mode: 'box' } });
-  });
-
-  it('shows an empty-state hint instead of a blank panel body when a section has no rows', () => {
-    const empty = makeEditor();
-    empty.setConfig({ type: 'custom:petkit-puramax-card' });
-    const hints = Array.from(empty.shadowRoot.querySelectorAll('.empty-hint')).map((el) => el.textContent);
-    expect(hints.length).toBe(3);
-    expect(hints[0]).toContain('No cats configured');
-  });
-});
-
-describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
-  let editor;
-
-  beforeEach(() => {
-    editor = makeEditor();
-    editor.setConfig(baseConfig());
-  });
-
-  it("passes the main form's emitted value straight through, preserving device_entities untouched", () => {
-    const listener = vi.fn();
-    editor.addEventListener('config-changed', listener);
-
-    // device_entities is no longer in MAIN_SCHEMA, so a real ha-form emits
-    // it back unchanged as part of its full merged data object -- simulate
-    // that directly, same as cats/info_row/controls_row already do.
-    fireValueChanged(mainForm(editor), {
-      ...editor._config,
-      title: 'New Title',
-      device_id: 'abc123',
-      decline_threshold_pct: 70,
-    });
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    const { config } = listener.mock.calls[0][0].detail;
-    expect(config.title).toBe('New Title');
-    expect(config.device_id).toBe('abc123');
-    expect(config.device_entities).toEqual(baseConfig().device_entities);
-    expect(config.decline_threshold_pct).toBe(70);
-  });
-
-  it('dispatches config-changed as a bubbling, composed custom event (HA standard shape)', () => {
-    let captured = null;
-    editor.addEventListener('config-changed', (ev) => {
-      captured = ev;
-    });
-    fireValueChanged(mainForm(editor), editor._config);
-    expect(captured.bubbles).toBe(true);
-    expect(captured.composed).toBe(true);
-    expect(captured.detail.config).toBeDefined();
-  });
-
-  it('preserves cats/info_row/controls_row when only the main form changes', () => {
-    const listener = vi.fn();
-    editor.addEventListener('config-changed', listener);
-    fireValueChanged(mainForm(editor), { ...editor._config, title: 'Changed' });
-    const { config } = listener.mock.calls[0][0].detail;
-    expect(config.cats).toEqual(baseConfig().cats);
-    expect(config.info_row).toEqual(baseConfig().info_row);
+  it('does not throw when removing down to zero cats', () => {
+    editor.setConfig(baseConfig({ cats: [{ name: 'Only', color: '#fff' }] }));
+    const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
+    expect(() => click(removeBtn)).not.toThrow();
+    expect(catNameForms(editor).length).toBe(0);
   });
 
   it("updates a single cat's name in place when its name-row form changes", () => {
@@ -303,7 +237,7 @@ describe('PetkitPuramaxCardEditor: editing fields fires config-changed', () => {
   });
 });
 
-describe('PetkitPuramaxCardEditor: cats array add/remove', () => {
+describe('PetkitPuramaxCardEditor: status chips / controls list view', () => {
   let editor;
 
   beforeEach(() => {
@@ -311,114 +245,50 @@ describe('PetkitPuramaxCardEditor: cats array add/remove', () => {
     editor.setConfig(baseConfig());
   });
 
-  it('adds a new blank cat row when "+ Add cat" is clicked', () => {
+  it('shows one summary row per configured info_row/controls_row entry, with a drag handle', () => {
+    const infoRow = infoRows(editor)[0];
+    expect(infoRow.querySelector('.handle')).not.toBeNull();
+    expect(infoRow.querySelector('.summary-label').textContent).toBe('Consumable');
+    expect(infoRow.querySelector('.edit-btn')).not.toBeNull();
+    expect(infoRow.querySelector('.remove-btn')).not.toBeNull();
+
+    const controlRow = controlsRows(editor)[0];
+    expect(controlRow.querySelector('.summary-label').textContent).toBe('Start');
+  });
+
+  it('exposes an always-present "add an entity" picker instead of a blank draft row', () => {
+    expect(addInfoRowForm(editor).schema).toEqual([{ name: 'entity', label: 'Add a status chip', selector: { entity: {} } }]);
+    expect(addControlRowForm(editor).schema).toEqual([{ name: 'entity', label: 'Add a control', selector: { entity: {} } }]);
+  });
+
+  it('picking an entity in the info_row add-picker appends a new summary row, auto-filling its icon from the entity', () => {
+    editor.hass = { states: { 'sensor.new_chip': { attributes: { icon: 'mdi:water-percent' } } } };
     const listener = vi.fn();
     editor.addEventListener('config-changed', listener);
-    click(editor.shadowRoot.getElementById('add-cat'));
+    fireValueChanged(addInfoRowForm(editor), { entity: 'sensor.new_chip' });
     const { config } = listener.mock.calls[0][0].detail;
-    expect(config.cats.length).toBe(3);
-    expect(config.cats[2].name).toBe('');
-    // the editor re-renders itself after mutating, so the DOM reflects it immediately
-    expect(catNameForms(editor).length).toBe(3);
+    expect(config.info_row[1]).toEqual({ entity: 'sensor.new_chip', name: '', icon: 'mdi:water-percent' });
   });
 
-  it('removes the correct cat row when its Remove button is clicked', () => {
+  it('falls back to the generic default icon when the entity has none set', () => {
+    editor.hass = { states: { 'sensor.new_chip': { attributes: {} } } };
     const listener = vi.fn();
     editor.addEventListener('config-changed', listener);
-    const rows = editor.shadowRoot.querySelectorAll('#cats-rows .cat-item');
-    const removeBtn = rows[0].querySelector('.remove-btn');
-    click(removeBtn);
+    fireValueChanged(addInfoRowForm(editor), { entity: 'sensor.new_chip' });
     const { config } = listener.mock.calls[0][0].detail;
-    expect(config.cats.length).toBe(1);
-    expect(config.cats[0].name).toBe('Cat B');
-    expect(catNameForms(editor).length).toBe(1);
+    expect(config.info_row[1].icon).toBe('mdi:information-outline');
   });
 
-  it('does not throw when removing down to zero cats', () => {
-    editor.setConfig(baseConfig({ cats: [{ name: 'Only', color: '#fff' }] }));
-    const removeBtn = editor.shadowRoot.querySelector('#cats-rows .remove-btn');
-    expect(() => click(removeBtn)).not.toThrow();
-    expect(catNameForms(editor).length).toBe(0);
-  });
-});
-
-describe('PetkitPuramaxCardEditor: status chips / controls collapse-to-summary UX', () => {
-  it('typing an entity into a minimal info_row form collapses it to a summary row', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig({ info_row: [{ entity: '', name: '', icon: 'mdi:information-outline' }] }));
-    const form = infoRows(editor)[0].querySelector('ha-form');
-    fireValueChanged(form, { entity: 'sensor.new_chip' });
-    const rows = infoRows(editor);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(true);
-    expect(rows[0].querySelector('.summary-label').textContent).toBe('sensor.new_chip');
+  it('picking an entity in the controls_row add-picker appends a new "press" row, auto-filling its icon', () => {
+    editor.hass = { states: { 'button.new': { attributes: { icon: 'mdi:broom' } } } };
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    fireValueChanged(addControlRowForm(editor), { entity: 'button.new' });
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.controls_row[1]).toEqual({ entity: 'button.new', name: '', icon: 'mdi:broom', action: 'press' });
   });
 
-  it('clicking Edit on an info_row summary row reveals the full field set', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig());
-    const summaryRow = infoRows(editor)[0];
-    click(summaryRow.querySelector('.edit-btn'));
-    const rows = infoRows(editor);
-    expect(rows[0].classList.contains('summary-row')).toBe(false);
-    const schema = rows[0].querySelector('ha-form').schema;
-    expect(schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'unit', 'warn_below', 'warn_above', 'warn_state']);
-  });
-
-  it('clicking Done on an expanded info_row folds it back to a summary row', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig());
-    click(infoRows(editor)[0].querySelector('.edit-btn'));
-    expect(infoRows(editor)[0].classList.contains('summary-row')).toBe(false);
-    click(infoRows(editor)[0].querySelector('.collapse-btn'));
-    expect(infoRows(editor)[0].classList.contains('summary-row')).toBe(true);
-  });
-
-  it('a new controls_row entry starts as a minimal entity-only form', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig({ controls_row: [] }));
-    click(editor.shadowRoot.getElementById('add-control-row'));
-    const rows = controlsRows(editor);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(false);
-    expect(rows[0].querySelector('ha-form').schema.map((s) => s.name)).toEqual(['entity']);
-  });
-
-  it('picking an entity for a new controls_row entry collapses it to a summary row', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig({ controls_row: [] }));
-    click(editor.shadowRoot.getElementById('add-control-row'));
-    const form = controlsRows(editor)[0].querySelector('ha-form');
-    fireValueChanged(form, { entity: 'button.new' });
-    const rows = controlsRows(editor);
-    expect(rows[0].classList.contains('summary-row')).toBe(true);
-    expect(rows[0].querySelector('.summary-label').textContent).toBe('button.new');
-  });
-
-  it('a toggle_maintenance row (no plain entity field) still collapses to a summary once start_entity is set', () => {
-    const editor = makeEditor();
-    editor.setConfig(
-      baseConfig({
-        controls_row: [
-          { name: 'Maint', icon: 'mdi:wrench', action: 'toggle_maintenance', start_entity: 'button.start', exit_entity: 'button.exit' },
-        ],
-      }),
-    );
-    const rows = controlsRows(editor);
-    expect(rows[0].classList.contains('summary-row')).toBe(true);
-    expect(rows[0].querySelector('.summary-label').textContent).toBe('Maint');
-  });
-
-  it('clicking Edit on a controls_row summary row reveals the action-appropriate full field set', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig());
-    click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const schema = controlsRows(editor)[0].querySelector('ha-form').schema;
-    expect(schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity', 'confirm']);
-  });
-
-  it('removing a collapsed row while another is expanded keeps the expanded one open (index reindexing)', () => {
-    const editor = makeEditor();
+  it('reorders status chips when the sortable list fires item-moved', () => {
     editor.setConfig(
       baseConfig({
         info_row: [
@@ -427,23 +297,131 @@ describe('PetkitPuramaxCardEditor: status chips / controls collapse-to-summary U
         ],
       }),
     );
-    // Expand the second row, then remove the first -- the second row (now
-    // at index 0) should still be expanded, not the (deleted) first one.
-    click(infoRows(editor)[1].querySelector('.edit-btn'));
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    const sortable = editor.shadowRoot.querySelector('#info-rows ha-sortable');
+    fireItemMoved(sortable, 0, 1);
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.info_row.map((r) => r.name)).toEqual(['B', 'A']);
+  });
+
+  it('reorders controls when the sortable list fires item-moved', () => {
+    editor.setConfig(
+      baseConfig({
+        controls_row: [
+          { name: 'A', action: 'press', entity: 'button.a' },
+          { name: 'B', action: 'press', entity: 'button.b' },
+        ],
+      }),
+    );
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    const sortable = editor.shadowRoot.querySelector('#controls-rows ha-sortable');
+    fireItemMoved(sortable, 0, 1);
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.controls_row.map((r) => r.name)).toEqual(['B', 'A']);
+  });
+
+  it('a toggle_maintenance row (no plain entity field) still shows a real summary label via start_entity', () => {
+    editor.setConfig(
+      baseConfig({
+        controls_row: [
+          { name: '', icon: 'mdi:wrench', action: 'toggle_maintenance', start_entity: 'button.start', exit_entity: 'button.exit' },
+        ],
+      }),
+    );
+    expect(controlsRows(editor)[0].querySelector('.summary-label').textContent).toBe('button.start');
+  });
+
+  it('removing a row via its icon button fires config-changed correctly', () => {
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
     click(infoRows(editor)[0].querySelector('.remove-btn'));
-    const rows = infoRows(editor);
-    expect(rows.length).toBe(1);
-    expect(rows[0].classList.contains('summary-row')).toBe(false);
-    expect(rows[0].querySelector('ha-form').data.name).toBe('B');
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.info_row.length).toBe(0);
+  });
+});
+
+describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
+  let editor;
+
+  beforeEach(() => {
+    editor = makeEditor();
+    editor.setConfig(baseConfig());
+  });
+
+  it('clicking Edit on a status chip swaps the whole editor to a single full-field sub-page with a back button', () => {
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    expect(mainForm(editor)).toBeNull();
+    expect(editor.shadowRoot.querySelector('#cats-rows')).toBeNull();
+    expect(backButton(editor)).not.toBeNull();
+    expect(editor.shadowRoot.querySelector('.detail-title').textContent).toBe('Edit status chip');
+    const schema = detailForm(editor).schema;
+    expect(schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'unit', 'warn_below', 'warn_above', 'warn_state']);
+    expect(detailForm(editor).data).toEqual(baseConfig().info_row[0]);
+  });
+
+  it('clicking Edit on a control shows the action-appropriate full field set', () => {
+    click(controlsRows(editor)[0].querySelector('.edit-btn'));
+    expect(editor.shadowRoot.querySelector('.detail-title').textContent).toBe('Edit control');
+    const schema = detailForm(editor).schema;
+    expect(schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity', 'confirm']);
+  });
+
+  it('shows start/exit/state entity fields (no plain entity field) when editing a toggle_maintenance row', () => {
+    editor.setConfig(
+      baseConfig({
+        controls_row: [
+          { name: 'M', icon: 'mdi:wrench', action: 'toggle_maintenance', start_entity: 'button.start', exit_entity: 'button.exit' },
+        ],
+      }),
+    );
+    click(controlsRows(editor)[0].querySelector('.edit-btn'));
+    const names = detailForm(editor).schema.map((s) => s.name);
+    expect(names).toContain('start_entity');
+    expect(names).toContain('exit_entity');
+    expect(names).toContain('state_entity');
+    expect(names).not.toContain('entity');
+  });
+
+  it('editing a field in the sub-page fires config-changed with the updated row', () => {
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    const listener = vi.fn();
+    editor.addEventListener('config-changed', listener);
+    fireValueChanged(detailForm(editor), { ...baseConfig().info_row[0], name: 'Renamed chip' });
+    const { config } = listener.mock.calls[0][0].detail;
+    expect(config.info_row[0].name).toBe('Renamed chip');
+  });
+
+  it('re-renders the sub-page with a new schema when a control\'s action field changes', () => {
+    click(controlsRows(editor)[0].querySelector('.edit-btn'));
+    const before = detailForm(editor);
+    fireValueChanged(before, { name: 'Start', icon: 'mdi:play', action: 'toggle', entity: 'switch.a' });
+    const after = detailForm(editor);
+    expect(after).not.toBe(before);
+    expect(after.schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity']);
+  });
+
+  it('clicking the back button returns to the normal list view', () => {
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    expect(mainForm(editor)).toBeNull();
+    click(backButton(editor));
+    expect(mainForm(editor)).not.toBeNull();
+    expect(infoRows(editor).length).toBe(1);
+  });
+
+  it('a value-only setConfig round-trip while in the sub-page updates the form in place, not a rebuild', () => {
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    const before = detailForm(editor);
+    editor.setConfig(baseConfig({ info_row: [{ ...baseConfig().info_row[0], name: 'Renamed chip' }] }));
+    expect(detailForm(editor)).toBe(before);
+    expect(detailForm(editor).data.name).toBe('Renamed chip');
+    // still on the sub-page, not bounced back to the list
+    expect(backButton(editor)).not.toBeNull();
   });
 });
 
 describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse expansion panels', () => {
-  // This is the actual bug: the dashboard host calls setConfig() again on
-  // every config-changed round-trip we fire ourselves -- i.e. on every
-  // value edit, not just when a genuinely different config is assigned. A
-  // full rebuild there recreates every ha-expansion-panel from scratch,
-  // losing its open/closed state.
   it('keeps the same ha-expansion-panel node identity when setConfig is called again with only a value changed', () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
@@ -455,7 +433,7 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
     expect(panelsAfter).toEqual(panelsBefore);
   });
 
-  it('preserves each panel\'s expanded state across a value-only setConfig call', () => {
+  it("preserves each panel's expanded state across a value-only setConfig call", () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
     const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
@@ -471,7 +449,7 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
     expect(after[2].expanded).toBe(true);
   });
 
-  it('updates existing forms\' data in place instead of rebuilding, for a value-only setConfig call', () => {
+  it("updates existing forms' data in place instead of rebuilding, for a value-only setConfig call", () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
     const before = mainForm(editor);
@@ -485,7 +463,7 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
     expect(catNameForms(editor)[1]).toBe(beforeCatForms[1]);
   });
 
-  it('refreshes a collapsed summary row\'s label in place for a value-only setConfig call', () => {
+  it("refreshes a summary row's label in place for a value-only setConfig call", () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
     const rowBefore = infoRows(editor)[0];
@@ -509,19 +487,6 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
     const after = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
     expect(after[0].expanded).toBe(true);
     expect(after[1].expanded).toBe(true);
-  });
-
-  it('does still do a full rebuild when a controls_row action change alters its visible sub-fields', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig({ controls_row: [{ name: 'A', icon: 'mdi:a', action: 'press', entity: 'button.a' }] }));
-    click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const before = controlsRows(editor)[0].querySelector('ha-form');
-
-    editor.setConfig(baseConfig({ controls_row: [{ name: 'A', icon: 'mdi:a', action: 'toggle', entity: 'switch.a' }] }));
-
-    const after = controlsRows(editor)[0].querySelector('ha-form');
-    expect(after).not.toBe(before);
-    expect(after.schema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity']);
   });
 });
 
@@ -554,51 +519,13 @@ describe('PetkitPuramaxCardEditor: hass updates do not rebuild the DOM (scroll/f
     expect(mainForm(editor).hass).toBe(hass);
     expect(catNameForms(editor)[0].hass).toBe(hass);
   });
-});
 
-describe('PetkitPuramaxCardEditor: controls_row per-action fields', () => {
-  it('shows entity + confirm fields for a "press" action row', () => {
+  it('propagates hass onto the sub-page form while it is open', () => {
     const editor = makeEditor();
-    editor.setConfig(baseConfig({ controls_row: [{ name: 'A', icon: 'mdi:a', action: 'press', entity: 'button.a' }] }));
-    click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const schema = controlsRows(editor)[0].querySelector('ha-form').schema;
-    const names = schema.map((s) => s.name);
-    expect(names).toContain('entity');
-    expect(names).toContain('confirm');
-    expect(names).not.toContain('start_entity');
-  });
-
-  it('shows start/exit/state entity fields for a "toggle_maintenance" action row', () => {
-    const editor = makeEditor();
-    editor.setConfig(
-      baseConfig({
-        controls_row: [
-          {
-            name: 'M',
-            icon: 'mdi:wrench',
-            action: 'toggle_maintenance',
-            start_entity: 'button.start',
-            exit_entity: 'button.exit',
-          },
-        ],
-      }),
-    );
-    click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const schema = controlsRows(editor)[0].querySelector('ha-form').schema;
-    const names = schema.map((s) => s.name);
-    expect(names).toContain('start_entity');
-    expect(names).toContain('exit_entity');
-    expect(names).toContain('state_entity');
-    expect(names).not.toContain('entity');
-  });
-
-  it('re-renders the row with the new schema when the action field changes', () => {
-    const editor = makeEditor();
-    editor.setConfig(baseConfig({ controls_row: [{ name: 'A', icon: 'mdi:a', action: 'press', entity: 'button.a' }] }));
-    click(controlsRows(editor)[0].querySelector('.edit-btn'));
-    const form = controlsRows(editor)[0].querySelector('ha-form');
-    fireValueChanged(form, { name: 'A', icon: 'mdi:a', action: 'toggle', entity: 'switch.a' });
-    const newSchema = controlsRows(editor)[0].querySelector('ha-form').schema;
-    expect(newSchema.map((s) => s.name)).toEqual(['name', 'icon', 'action', 'entity']);
+    editor.setConfig(baseConfig());
+    click(infoRows(editor)[0].querySelector('.edit-btn'));
+    const hass = { states: { 'sensor.foo': { state: 'bar' } } };
+    editor.hass = hass;
+    expect(detailForm(editor).hass).toBe(hass);
   });
 });

@@ -144,15 +144,36 @@ describe('PetkitPuramaxCard: setConfig validation', () => {
 });
 
 describe('PetkitPuramaxCard: getStubConfig', () => {
-  it('returns an object that itself passes setConfig without throwing', () => {
+  it('returns an object that itself passes setConfig without throwing, with no hass', () => {
     const card = makeCard();
     const stub = PetkitPuramaxCard.getStubConfig();
     expect(() => card.setConfig(stub)).not.toThrow();
   });
 
-  it('uses obviously-placeholder entity ids, not real device data', () => {
+  it('hardcodes no entity ids and no device_entities at all', () => {
     const stub = PetkitPuramaxCard.getStubConfig();
-    expect(stub.device_entities.total_use).toContain('example');
+    expect(stub.device_entities).toBeUndefined();
+  });
+
+  it('leaves device_id empty when hass has no PetKit device', () => {
+    const stub = PetkitPuramaxCard.getStubConfig({ entities: {} });
+    expect(stub.device_id).toBe('');
+  });
+
+  it('auto-detects device_id from the entity registry when a PetKit device exists', () => {
+    const hass = {
+      entities: {
+        'sensor.other_thing': { entity_id: 'sensor.other_thing', device_id: 'dev-unrelated', platform: 'other' },
+        'sensor.petkit_total_use': { entity_id: 'sensor.petkit_total_use', device_id: 'dev-petkit', platform: 'petkit' },
+      },
+    };
+    const stub = PetkitPuramaxCard.getStubConfig(hass);
+    expect(stub.device_id).toBe('dev-petkit');
+  });
+
+  it('uses a friendly default cat name and a human-readable color', () => {
+    const stub = PetkitPuramaxCard.getStubConfig();
+    expect(stub.cats).toEqual([{ name: 'My Cat', color: 'blue' }]);
   });
 });
 
@@ -243,6 +264,23 @@ describe('PetkitPuramaxCard: device_id resolution', () => {
     const calledEntityIds = hass.callWS.mock.calls.flatMap((call) => call[0].entity_ids || []);
     expect(calledEntityIds).toContain('sensor.manual_override_total_use');
     expect(calledEntityIds).not.toContain('sensor.petkit_total_use');
+  });
+
+  it('accepts an explicitly-empty device_id (e.g. a stub with no auto-detected device) without throwing', () => {
+    const card = makeCard();
+    expect(() =>
+      card.setConfig({ type: 'custom:petkit-puramax-card', device_id: '', cats: [{ name: 'A', color: '#fff' }] }),
+    ).not.toThrow();
+  });
+
+  it('renders a "device is required" error (not a generic detection-failure one) when device_id is empty', async () => {
+    const card = makeCard();
+    card.setConfig({ type: 'custom:petkit-puramax-card', device_id: '', cats: [{ name: 'A', color: '#fff' }] });
+    card.hass = makeHass({});
+    await flush();
+    const alert = card.shadowRoot.querySelector('ha-alert');
+    expect(alert).not.toBeNull();
+    expect(alert.textContent).toContain('A PetKit device is required');
   });
 });
 
@@ -488,6 +526,79 @@ describe('PetkitPuramaxCard: rendering', () => {
 
   it('getCardSize returns a fixed layout size', () => {
     expect(card.getCardSize()).toBe(14);
+  });
+
+  it('shows the resolved device state top-right in the header, and it is tappable', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.test_petkit_state': { state: 'auto_cleaning' },
+    });
+    await flush();
+    const badge = card.shadowRoot.querySelector('.state-badge');
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe('auto cleaning');
+    const listener = vi.fn();
+    card.addEventListener('hass-more-info', listener);
+    badge.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(listener.mock.calls[0][0].detail).toEqual({ entityId: 'sensor.test_petkit_state' });
+  });
+
+  it('hides the state badge when the state entity has no value', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.state-badge').hidden).toBe(true);
+  });
+
+  it('omits the state badge entirely when show_state is false', async () => {
+    card.setConfig(baseConfig({ show_state: false }));
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.test_petkit_state': { state: 'idle' },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.state-badge')).toBeNull();
+  });
+
+  it('hides the History (chart) section when show_history is false, without breaking Working Records', async () => {
+    card.setConfig(baseConfig({ show_history: false }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chart-section')).toBeNull();
+    expect(card.shadowRoot.querySelector('.records-section')).not.toBeNull();
+  });
+
+  it('hides the Analytics section when show_analytics is false', async () => {
+    card.setConfig(baseConfig({ show_analytics: false }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.analytics-section')).toBeNull();
+  });
+
+  it('hides the Working Records section when show_working_records is false, without breaking the chart', async () => {
+    card.setConfig(baseConfig({ show_working_records: false }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.records-section')).toBeNull();
+    expect(card.shadowRoot.querySelector('.chart-section')).not.toBeNull();
+  });
+
+  it('shows every section by default (all show_* toggles default true)', async () => {
+    card.setConfig(baseConfig());
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chart-section')).not.toBeNull();
+    expect(card.shadowRoot.querySelector('.analytics-section')).not.toBeNull();
+    expect(card.shadowRoot.querySelector('.records-section')).not.toBeNull();
+  });
+
+  it('resolves a named HA theme color (not just raw hex) for a cat, e.g. in the Analytics dot', async () => {
+    card.setConfig(baseConfig({ cats: [{ name: 'Cat A', color: 'deep-orange' }] }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const dot = card.shadowRoot.querySelector('.cat-name-cell .dot');
+    expect(dot.getAttribute('style')).toContain('var(--deep-orange-color)');
   });
 
   it('renders the cat name and color dot inside the analytics table\'s top-left cell, not a separate title line', async () => {
@@ -1161,10 +1272,11 @@ describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', 
 // Regression: this project must stay 100% generic — no card or lib module
 // should ever hardcode a concrete entity id (or any of the original
 // production instance's specific values). Only `examples/` and test
-// fixtures are allowed to reference example-shaped ids, and the one
-// legitimate exception inside source is PetkitPuramaxCard.getStubConfig(),
-// which is *required* to return placeholder ids so the card picker doesn't
-// throw — it's excluded below by stripping its method body before scanning.
+// fixtures are allowed to reference example-shaped ids. This used to need a
+// carve-out for PetkitPuramaxCard.getStubConfig() (which returned
+// placeholder entity ids so the card picker didn't throw) -- it no longer
+// hardcodes anything at all (device_id is auto-detected from `hass`, or left
+// empty), so the scan below covers every file with no exceptions.
 // ---------------------------------------------------------------------------
 describe('regression: no hardcoded entity ids in logic/rendering source', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1182,18 +1294,6 @@ describe('regression: no hardcoded entity ids in logic/rendering source', () => 
     return out;
   }
 
-  // Strips PetkitPuramaxCard.getStubConfig()'s method body (its one
-  // legitimate placeholder-id block) out of the card source before scanning.
-  function stripStubConfig(source) {
-    const startMarker = 'static getStubConfig()';
-    const start = source.indexOf(startMarker);
-    if (start === -1) return source;
-    const nextMethodMarker = 'setConfig(config)';
-    const end = source.indexOf(nextMethodMarker, start);
-    if (end === -1) return source;
-    return source.slice(0, start) + source.slice(end);
-  }
-
   it('src/lib/** never hardcodes a concrete entity id (it is meant to be fully device-agnostic)', () => {
     const libDir = path.join(srcDir, 'lib');
     for (const file of listJsFiles(libDir)) {
@@ -1203,12 +1303,11 @@ describe('regression: no hardcoded entity ids in logic/rendering source', () => 
     }
   });
 
-  it('src/cards/**/*.js (excluding styles and the documented getStubConfig placeholder) never hardcodes a concrete entity id', () => {
+  it('src/cards/**/*.js (excluding styles) never hardcodes a concrete entity id', () => {
     const cardsDir = path.join(srcDir, 'cards');
     for (const file of listJsFiles(cardsDir)) {
       if (file.endsWith('.styles.js')) continue;
-      let text = fs.readFileSync(file, 'utf8');
-      if (file.endsWith('petkit-puramax-card.js')) text = stripStubConfig(text);
+      const text = fs.readFileSync(file, 'utf8');
       const match = text.match(ENTITY_ID_PATTERN);
       expect(match, `${path.relative(srcDir, file)} contains a hardcoded entity id: ${match?.[0]}`).toBeNull();
     }

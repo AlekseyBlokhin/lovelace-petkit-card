@@ -6,6 +6,7 @@ import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.
 import { computeChipDisplay } from '../../lib/chips.js';
 import { getState, fireMoreInfo, callService, pressButton } from '../../lib/ha-helpers.js';
 import { resolveDeviceEntities } from '../../lib/device-entities.js';
+import { resolveCssColor } from '../../lib/color.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
@@ -45,22 +46,24 @@ export class PetkitPuramaxCard extends HTMLElement {
 
   // Returns a minimal-but-valid example config so dragging this card from
   // HA's card picker doesn't immediately throw in setConfig (which requires
-  // `device_entities` and a non-empty `cats`). Every id here is an obvious
-  // placeholder the user is expected to replace with their own entities.
-  static getStubConfig() {
+  // `device_id` or `device_entities`, and a non-empty `cats`). No entity ids
+  // are ever hardcoded here (there'd be nothing real to point them at) --
+  // `device_id` is auto-detected from `hass` when a PetKit device is already
+  // set up (matching the entity registry's own `platform: 'petkit'`, the
+  // same signal `resolveDeviceEntities` keys off of), or left empty
+  // otherwise; `_configError()` then explains what's still needed once the
+  // card actually mounts.
+  static getStubConfig(hass) {
+    const petkitEntity =
+      hass && hass.entities ? Object.values(hass.entities).find((e) => e.platform === 'petkit') : null;
     return {
       type: 'custom:petkit-puramax-card',
       title: 'PETKIT PURAMAX',
-      device_entities: {
-        error: 'sensor.example_petkit_error',
-        last_event: 'sensor.example_petkit_last_event',
-        state: 'sensor.example_petkit_state',
-        total_use: 'sensor.example_petkit_total_use',
-      },
+      device_id: petkitEntity ? petkitEntity.device_id : '',
       cats: [
         {
-          name: 'Example Cat',
-          color: '#4fc3f7',
+          name: 'My Cat',
+          color: 'blue',
         },
       ],
     };
@@ -72,18 +75,21 @@ export class PetkitPuramaxCard extends HTMLElement {
     }
     // `device_id` lets total_use/last_used_by/error/last_event/state be
     // auto-detected from the device's entity registry (see
-    // `resolveDeviceEntities`) instead of hand-typed -- so when it's set,
-    // `device_entities` is optional and its presence/contents can only be
-    // fully validated once `hass` (and its entity registry) is available;
-    // see `_configError()`, checked on first build.
-    if (!config.device_id && !config.device_entities) {
+    // `resolveDeviceEntities`) instead of hand-typed -- so once the config
+    // has opted into it (the key is present at all, even as `''` -- see
+    // `getStubConfig`, which leaves it empty when no device was
+    // auto-detected), `device_entities` is optional and its presence/
+    // contents can only be fully validated once `hass` (and its entity
+    // registry) is available; see `_configError()`, checked on first build.
+    const usesDeviceId = config.device_id !== undefined;
+    if (!usesDeviceId && !config.device_entities) {
       throw new Error('petkit-puramax-card: "device_entities" is required in config (or set "device_id")');
     }
     // The real Lovelace host passes a frozen config object -- never mutate
     // `config` itself (a plain-object stand-in in tests can mask this, but
     // `config.device_entities = ...` throws for real against a frozen one).
     const deviceEntities = config.device_entities || {};
-    if (!config.device_id && !deviceEntities.total_use) {
+    if (!usesDeviceId && !deviceEntities.total_use) {
       throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config (or set "device_id")');
     }
     if (!config.cats) {
@@ -95,7 +101,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     // With a single cat, every visit is trivially theirs -- no need to know
     // which cat used the box, so last_used_by isn't required until there's
     // an actual ambiguity to resolve.
-    if (!config.device_id && config.cats.length > 1 && !deviceEntities.last_used_by) {
+    if (!usesDeviceId && config.cats.length > 1 && !deviceEntities.last_used_by) {
       throw new Error(
         'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured (or set "device_id")',
       );
@@ -131,15 +137,22 @@ export class PetkitPuramaxCard extends HTMLElement {
     };
   }
 
-  // Only meaningful when `device_id` is set -- the non-device_id path is
-  // already fully validated synchronously in `setConfig`.
+  // Only meaningful once the config has opted into `device_id` mode (the
+  // key is present, even as `''` -- see `getStubConfig`) -- the plain
+  // `device_entities`-only path is already fully validated synchronously in
+  // `setConfig`.
   _configError() {
-    if (!this._config.device_id) return null;
+    if (this._config.device_id === undefined) return null;
+    const noDeviceSelected = !this._config.device_id;
     if (!this._deviceEntities.total_use) {
-      return 'Could not auto-detect a "total use" sensor on the selected device. Set "device_entities.total_use" in the config to override.';
+      return noDeviceSelected
+        ? 'A PetKit device is required. Select one in the card editor, or set "device_entities.total_use" manually.'
+        : 'Could not auto-detect a "total use" sensor on the selected device. Set "device_entities.total_use" in the config to override.';
     }
     if (this._config.cats.length > 1 && !this._deviceEntities.last_used_by) {
-      return 'Could not auto-detect a "last used by" sensor on the selected device (required for more than one cat). Set "device_entities.last_used_by" in the config to override.';
+      return noDeviceSelected
+        ? 'A PetKit device is required (or set "device_entities.last_used_by" manually) since more than one cat is configured.'
+        : 'Could not auto-detect a "last used by" sensor on the selected device (required for more than one cat). Set "device_entities.last_used_by" in the config to override.';
     }
     return null;
   }
@@ -430,9 +443,13 @@ export class PetkitPuramaxCard extends HTMLElement {
       <ha-card>
         <div class="header">
           <div class="title">${cfg.title || DEFAULT_TITLE}</div>
+          ${cfg.show_state !== false ? '<div class="state-badge" id="state-badge" hidden></div>' : ''}
         </div>
         <div class="status-row" id="status-row"></div>
         <div class="controls-row" id="controls-row"></div>
+        ${
+          cfg.show_history !== false
+            ? `
         <div class="chart-section">
           <div class="chart-header">
             <button class="nav-btn" id="prev-day">&#9664;</button>
@@ -443,21 +460,35 @@ export class PetkitPuramaxCard extends HTMLElement {
             <div id="usage-body"></div>
           </div>
           <div class="chart-area" id="chart-area"></div>
-        </div>
+        </div>`
+            : ''
+        }
+        ${
+          cfg.show_analytics !== false
+            ? `
         <div class="analytics-section">
           <div class="section-title">Analytics</div>
           <div id="no-visit-banner"></div>
           <div id="decline-banner"></div>
           <div class="analytics-grid" id="analytics-grid"></div>
-        </div>
+        </div>`
+            : ''
+        }
+        ${
+          cfg.show_working_records !== false
+            ? `
         <div class="records-section">
           <div class="section-title">Working Records</div>
           <div class="records-list" id="records-list"></div>
-        </div>
+        </div>`
+            : ''
+        }
       </ha-card>
     `;
-    this.shadowRoot.getElementById('prev-day').addEventListener('click', () => this._changeDay(-1));
-    this.shadowRoot.getElementById('next-day').addEventListener('click', () => this._changeDay(1));
+    const prevBtn = this.shadowRoot.getElementById('prev-day');
+    const nextBtn = this.shadowRoot.getElementById('next-day');
+    if (prevBtn) prevBtn.addEventListener('click', () => this._changeDay(-1));
+    if (nextBtn) nextBtn.addEventListener('click', () => this._changeDay(1));
     this._updateLiveValues();
     this._renderChartArea();
     this._renderAnalyticsArea();
@@ -473,6 +504,32 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!this._built) return;
     const cfg = this._config;
     const de = this._deviceEntities;
+
+    // state badge: top-right of the header, tappable like a status chip.
+    // `device_entities.state` has no other visible use on the card today.
+    const stateBadge = this.shadowRoot.getElementById('state-badge');
+    if (stateBadge) {
+      const stateValue = this._s(de.state, null);
+      stateBadge.hidden = !stateValue;
+      if (stateValue) {
+        stateBadge.textContent = stateValue.replace(/_/g, ' ');
+        stateBadge.dataset.entity = de.state;
+      }
+      if (!stateBadge.dataset.bound) {
+        stateBadge.dataset.bound = '1';
+        stateBadge.setAttribute('tabindex', '0');
+        const openState = () => {
+          if (stateBadge.dataset.entity) fireMoreInfo(this, stateBadge.dataset.entity);
+        };
+        stateBadge.addEventListener('click', openState);
+        stateBadge.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            openState();
+          }
+        });
+      }
+    }
 
     // status row: fully config-driven — add/remove/reorder chips via `info_row` in YAML
     const statusRow = this.shadowRoot.getElementById('status-row');
@@ -581,10 +638,14 @@ export class PetkitPuramaxCard extends HTMLElement {
     const nextBtn = /** @type {HTMLButtonElement|null} */ (this.shadowRoot.getElementById('next-day'));
     if (nextBtn) nextBtn.disabled = this._dayOffset >= 0;
 
+    // `area`/`usageBody` (chart-section, gated by `show_history`) and
+    // `recordsList` (records-section, gated by `show_working_records`) are
+    // independently optional -- neither element existing is reason to skip
+    // the other, so each is guarded on its own below rather than one bailing
+    // out the whole function.
     const area = this.shadowRoot.getElementById('chart-area');
     const recordsList = this.shadowRoot.getElementById('records-list');
     const usageBody = this.shadowRoot.getElementById('usage-body');
-    if (!area) return;
 
     // Deliberately no "Loading…" interstitial: clearing the chart/usage/
     // records content to a placeholder and back on every fetch caused a
@@ -604,6 +665,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     // comment below for why.
     const visits = (this._chartVisits || []).filter((v) => v.cat).sort((a, b) => a.ts - b.ts);
 
+    if (area) {
     // Chart: 0-24h stem plot
     const width = CHART_WIDTH;
     const height = CHART_HEIGHT;
@@ -654,8 +716,9 @@ export class PetkitPuramaxCard extends HTMLElement {
         const x = xFor(v.ts);
         const y = yFor(v.duration);
         const bottom = height - padding.bottom;
-        return `<line x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="${v.cat.color}" stroke-width="2" />
-              <circle class="visit-point" cx="${x}" cy="${y}" r="5" fill="${v.cat.color}" />
+        const stemColor = resolveCssColor(v.cat.color);
+        return `<line x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="${stemColor}" stroke-width="2" />
+              <circle class="visit-point" cx="${x}" cy="${y}" r="5" fill="${stemColor}" />
               <line class="visit-hit" data-idx="${i}" x1="${x}" y1="${bottom}" x2="${x}" y2="${y}" stroke="transparent" stroke-width="16" />`;
       })
       .join('');
@@ -693,6 +756,7 @@ export class PetkitPuramaxCard extends HTMLElement {
         tooltip.classList.remove('visible');
       });
     });
+    }
 
     // Usage section: driven by the SAME data as the chart (`visits`, above),
     // so it always matches the day currently shown (not a separate live
@@ -721,11 +785,11 @@ export class PetkitPuramaxCard extends HTMLElement {
         cfg.cats
           .map((cat) => {
             const p = perCat[cat.name];
-            return `<span class="usage-cat"><span class="dot" style="background:${cat.color}"></span>${cat.name}: ${p.count}</span>`;
+            return `<span class="usage-cat"><span class="dot" style="background:${resolveCssColor(cat.color)}"></span>${cat.name}: ${p.count}</span>`;
           })
           .join('') +
         (unknownCount > 0
-          ? `<span class="usage-cat"><span class="dot" style="background:${unknownColor}"></span>${UNKNOWN_CAT_LABEL}: ${unknownCount}</span>`
+          ? `<span class="usage-cat"><span class="dot" style="background:${resolveCssColor(unknownColor)}"></span>${UNKNOWN_CAT_LABEL}: ${unknownCount}</span>`
           : '');
       usageBody.innerHTML = `
         <div class="usage-row">
@@ -819,7 +883,7 @@ export class PetkitPuramaxCard extends HTMLElement {
             <colgroup>
               <col class="col-name" /><col class="col-stat" /><col class="col-stat" /><col class="col-stat" />
             </colgroup>
-            <tr><td class="cat-name-cell"><span class="dot" style="background:${escapeHtml(cat.color)}"></span>${escapeHtml(cat.name)}</td><td>Today</td><td>3d avg</td><td>7d avg</td></tr>
+            <tr><td class="cat-name-cell"><span class="dot" style="background:${escapeHtml(resolveCssColor(cat.color))}"></span>${escapeHtml(cat.name)}</td><td>Today</td><td>3d avg</td><td>7d avg</td></tr>
             <tr><td>Visits</td><td>${a.todayCount ?? 0}</td><td>${a.avg3dVisits !== null && a.avg3dVisits !== undefined ? a.avg3dVisits.toFixed(1) : '—'}</td><td>${a.avg7dVisits !== null && a.avg7dVisits !== undefined ? a.avg7dVisits.toFixed(1) : '—'}</td></tr>
             <tr><td>Duration</td><td>${a.todayAvgDuration ? formatDuration(a.todayAvgDuration) : '—'}</td><td>${a.avg3dDuration ? formatDuration(a.avg3dDuration) : '—'}</td><td>${a.avg7dDuration ? formatDuration(a.avg7dDuration) : '—'}</td></tr>
           </table>

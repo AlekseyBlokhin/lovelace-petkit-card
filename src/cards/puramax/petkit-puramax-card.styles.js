@@ -28,8 +28,15 @@ export const CARD_STYLES = `
     --pk-analytics-stat-col: 22%;
   }
   ha-card { padding: var(--pk-space-2xl); display: flex; flex-direction: column; gap: var(--pk-space-xl); }
-  .header { display: flex; align-items: center; justify-content: space-between; }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: var(--pk-space-sm); }
   .title { font-size: 1.2em; font-weight: 500; color: var(--primary-text-color); }
+  .state-badge {
+    font-size: 0.75em; color: var(--secondary-text-color); background: var(--secondary-background-color);
+    border-radius: var(--pk-radius-lg); padding: var(--pk-space-2xs) var(--pk-space-sm);
+    cursor: pointer; text-transform: capitalize; white-space: nowrap; flex: 0 0 auto;
+  }
+  .state-badge:hover, .state-badge:focus-visible { background: var(--divider-color); outline: none; }
+  .state-badge[hidden] { display: none; }
   .status-row { display: flex; flex-wrap: wrap; gap: var(--pk-space-sm); }
   .chip { display: flex; align-items: center; gap: var(--pk-space-xs); background: var(--secondary-background-color); border-radius: var(--pk-radius-lg); padding: var(--pk-space-xs) var(--pk-space-md); flex: 1 1 auto; min-width: 100px; }
   .chip.warn { background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); }

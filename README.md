@@ -55,8 +55,10 @@ extra to set up.
   `notify.*` entity you configure.
 - A real visual config editor — drag the card onto a dashboard and
   configure it with forms, no YAML required to get started. It looks and
-  behaves just like Home Assistant's own settings pages, including a real
-  color-picker for cat colors.
+  behaves just like Home Assistant's own settings pages: a "Content"
+  section up front (title, device, and toggles for which sections show),
+  drag-to-reorder cats/status chips/controls, and the same add-an-entity /
+  Edit-opens-a-sub-page flow as the built-in Entities Card.
 
 ## Prerequisites
 
@@ -143,6 +145,10 @@ or a full example at
 |---|---|---|---|---|
 | `type` | yes | string | — | Must be `custom:petkit-puramax-card`. |
 | `title` | no | string | `"PETKIT PURAMAX"` | Card header title. |
+| `show_state` | no | boolean | `true` | Shows [`device_entities.state`](#device_entities) top-right of the header (e.g. "Idle"). Tapping it opens that entity's native more-info dialog, same as a status chip. |
+| `show_history` | no | boolean | `true` | Shows the day-switchable visit chart and its "Usage `<Day>`" line. |
+| `show_working_records` | no | boolean | `true` | Shows the [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) timeline. |
+| `show_analytics` | no | boolean | `true` | Shows the [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work) section, including the decline/spike and "no visit" banners. |
 | `device_id` | one of `device_id`/`device_entities.total_use` required | device id | — | Your PetKit device (native device picker in the visual editor). Auto-detects `device_entities.{total_use,last_used_by,error,last_event,state}` from the device's entity registry, by matching each sensor's stable `translation_key` — works regardless of what you've renamed the `entity_id`/friendly name to. Any key also set explicitly in `device_entities` overrides the auto-detected one. If a required sensor (`total_use`, or `last_used_by` when there's more than one cat) can't be auto-detected and isn't overridden, the card shows an in-card error naming the missing sensor. |
 | `device_entities` | one of `device_id`/`device_entities.total_use` required | object | — | See [`device_entities`](#device_entities) below. Optional (and acts only as an override on top of `device_id`'s auto-detection) once `device_id` is set. |
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
@@ -176,7 +182,7 @@ One entry per cat.
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `name` | yes | string | — | Display name. Must exactly match this cat's value as reported by [`device_entities.last_used_by`](#device_entities) — that's how a reconstructed visit gets attributed back to this cat. Not required to match when there's only one cat. |
-| `color` | yes | string (CSS color) | — | Chart/legend color for this cat. Picked via HA's native color selector in the visual editor. |
+| `color` | yes | string (CSS color, or a named HA palette color like `blue`/`deep-orange`) | — | Chart/legend color for this cat. Picked via HA's native color selector in the visual editor, which writes a human-readable palette name (not a hex code) when you pick a swatch — resolved to the matching theme color at render time. |
 
 Configuring more than one cat gives each their own chart stem color and
 their own Analytics row:
@@ -216,10 +222,15 @@ Buttons, in order.
 | `exit_entity` | action-dependent | entity id (`button`) | — | Required for `toggle_maintenance`: pressed when currently in maintenance mode. |
 | `state_entity` | no | entity id | [`device_entities.state`](#device_entities) | Overrides which entity `toggle_maintenance` reads to decide its current mode. |
 
-`cats`, `info_row`, and `controls_row` all have a repeating-row visual
-editor (add/remove buttons); `value_map`, `event_labels`, and
-`event_exclude` are YAML-only, since the visual editor doesn't yet have a
-clean way to edit an arbitrary object there.
+`cats` has a repeating-row visual editor (drag to reorder, Delete button).
+`info_row`/`controls_row` follow the same pattern as the built-in Entities
+Card: pick an entity in the always-present picker at the bottom of the list
+to add a row (its icon is pre-filled from the entity when it has one), drag
+to reorder, and click a row's Edit (pencil) button to open a full-page
+sub-editor for its other fields (Delete removes it directly from the list).
+`value_map`, `event_labels`, and `event_exclude` are YAML-only, since the
+visual editor doesn't yet have a clean way to edit an arbitrary object
+there.
 
 For the algorithm details behind the per-cat chart and Analytics — how
 visit duration/identity is reconstructed from raw sensor history — see
