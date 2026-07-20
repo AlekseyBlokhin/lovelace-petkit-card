@@ -9,36 +9,45 @@
  * actions instead of plain text buttons.
  *
  * `ha-form`'s `expandable` schema type DOES nest the bound data object by
- * default -- a group named e.g. `device_entities` reads/writes its
- * sub-fields against `data.device_entities`, matching this card's real
- * config shape exactly, so the main form binds directly to `this._config`
- * with no manual flatten/reconstruct step. `flatten: true` is the opt-out
- * for a group with no real backing object -- used below for `alerts`,
- * which is a purely visual grouping over otherwise-top-level config keys
- * (`decline_threshold_pct` etc. aren't actually nested under `cfg.alerts`).
+ * default -- a group named e.g. `alerts` (flattened here, see below) reads/
+ * writes its sub-fields against `data.alerts` unless `flatten: true` opts
+ * out. The main form binds directly to `this._config`, so keys outside
+ * MAIN_SCHEMA (cats/info_row/controls_row/device_entities) round-trip
+ * untouched via ha-form's own data merge -- `device_entities` is
+ * deliberately NOT in MAIN_SCHEMA (YAML/code-editor only, see the README),
+ * so this works the same way as any other unlisted key.
+ *
+ * `info_row`/`controls_row` rows follow the same collapsed-by-default
+ * pattern as HA's own "Entities" card editor: a brand-new row shows only an
+ * entity picker; once an entity is set it collapses to a one-line icon+name
+ * summary with an Edit (pencil) button that reveals the full field set, and
+ * a Done (check) button that folds it back. This is UI-only state
+ * (`_expandedInfoRows`/`_expandedControlRows`, index-keyed `Set`s) --
+ * unrelated to `_structureKey`, which only decides whether the *host's*
+ * echoed `setConfig()` round-trip needs a full DOM rebuild.
  */
 
 // `name` must exactly match this cat's value as reported by
 // `device_entities.last_used_by` (e.g. the PetKit integration's "Last used
 // by" sensor) -- that's how the card attributes reconstructed visits back
 // to a specific cat, with no per-cat helper entity needed.
-//
+const CAT_NAME_SCHEMA = [{ name: 'name', label: 'Name', selector: { text: {} } }];
+
 // `color` uses the native `ui_color` selector (a real HA color-picker
-// widget, not a hand-rolled swatch) rather than a plain hex-text field.
-// Wrapped in a nameless `grid` group so `ha-form` lays the two fields out
-// side-by-side instead of stacking them -- a nameless grid entry has no
-// data-nesting effect (see the MAIN_SCHEMA comment below), it's pure layout.
-const CAT_SCHEMA = [
-  {
-    type: 'grid',
-    schema: [
-      { name: 'name', label: 'Name', selector: { text: {} } },
-      { name: 'color', label: 'Color', selector: { ui_color: {} } },
-    ],
-  },
-];
+// widget, not a hand-rolled swatch). Kept in its own ha-form (not a `grid`
+// alongside name) so the Delete button always sits next to Name -- a single
+// grid-schema form wraps to two lines on narrow widths, which used to leave
+// Delete visually stranded between Name and Color once Color wrapped below.
+const CAT_COLOR_SCHEMA = [{ name: 'color', label: 'Color', selector: { ui_color: {} } }];
 
 const DEFAULT_NEW_CAT = { name: '', color: '#4fc3f7' };
+
+// Shown only until an entity is picked (see `_buildInfoRow`) -- the rest of
+// info_row's fields (name/icon/unit/warn_*) only appear once you click Edit
+// on the resulting summary row.
+const INFO_ROW_MINIMAL_SCHEMA = [{ name: 'entity', label: 'Entity', selector: { entity: {} } }];
+
+const DEFAULT_INFO_ICON = 'mdi:information-outline';
 
 // `value_map` (mapping a raw entity state to a display string) has no clean
 // ha-form widget for an arbitrary object-of-strings, so it stays YAML-only
@@ -53,9 +62,17 @@ const INFO_ROW_SCHEMA = [
   { name: 'warn_state', label: 'Warn state', selector: { text: {} } },
 ];
 
-const DEFAULT_NEW_INFO_ROW = { entity: '', name: '', icon: 'mdi:information-outline' };
+const DEFAULT_NEW_INFO_ROW = { entity: '', name: '', icon: DEFAULT_INFO_ICON };
 
 const CONTROL_ACTIONS = ['press', 'toggle_maintenance', 'toggle', 'more_info'];
+
+// Shown only until a primary entity is picked (see `_buildControlRow`) --
+// same reasoning as INFO_ROW_MINIMAL_SCHEMA. `toggle_maintenance` rows (the
+// one action with no plain `entity` field) can only be reached via Edit on
+// an already-summarized row, same as picking any other non-default action.
+const CONTROLS_ROW_MINIMAL_SCHEMA = [{ name: 'entity', label: 'Entity', selector: { entity: {} } }];
+
+const DEFAULT_CONTROL_ICON = 'mdi:gesture-tap-button';
 
 const CONTROLS_ROW_BASE_SCHEMA = [
   { name: 'name', label: 'Name', selector: { text: {} } },
@@ -84,34 +101,38 @@ function controlsRowSchema(action) {
   return [...CONTROLS_ROW_BASE_SCHEMA, ...(CONTROLS_ROW_ACTION_SCHEMA[action] || [])];
 }
 
-const DEFAULT_NEW_CONTROL_ROW = { name: '', icon: 'mdi:gesture-tap-button', action: 'press', entity: '' };
+const DEFAULT_NEW_CONTROL_ROW = { name: '', icon: DEFAULT_CONTROL_ICON, action: 'press', entity: '' };
+
+function hasInfoEntity(spec) {
+  return !!(spec && spec.entity);
+}
+
+// `toggle_maintenance` has no plain `entity` field -- `start_entity` is its
+// primary target, so a row configured that way still counts as "set" and
+// collapses to a summary instead of being stuck showing the minimal
+// entity-only picker forever.
+function hasControlPrimary(spec) {
+  return !!(spec && (spec.entity || spec.start_entity));
+}
+
+// Keeps expanded-row UI state (a `Set` of indices) correct after a row is
+// deleted: everything after the removed index shifts down by one, and the
+// removed index itself (if present) is dropped.
+function reindexAfterRemoval(set, removedIndex) {
+  const next = new Set();
+  set.forEach((i) => {
+    if (i < removedIndex) next.add(i);
+    else if (i > removedIndex) next.add(i - 1);
+  });
+  return next;
+}
 
 const MAIN_SCHEMA = [
-  {
-    name: 'device_id',
-    label: 'PetKit device (auto-detects the sensors below)',
-    selector: { device: { filter: { integration: 'petkit' } } },
-  },
   { name: 'title', label: 'Title', selector: { text: {} } },
   {
-    name: 'device_entities',
-    type: 'expandable',
-    title: 'Device entities (overrides)',
-    schema: [
-      {
-        name: 'total_use',
-        label: 'Total use sensor (required unless a device is selected above)',
-        selector: { entity: {} },
-      },
-      {
-        name: 'last_used_by',
-        label: 'Last used by sensor (required if more than one cat, unless auto-detected)',
-        selector: { entity: {} },
-      },
-      { name: 'error', label: 'Error sensor (auto-detected, or override)', selector: { entity: {} } },
-      { name: 'last_event', label: 'Last event sensor (auto-detected, or override)', selector: { entity: {} } },
-      { name: 'state', label: 'State sensor (auto-detected, or override)', selector: { entity: {} } },
-    ],
+    name: 'device_id',
+    label: 'PetKit device',
+    selector: { device: { filter: { integration: 'petkit' } } },
   },
   {
     name: 'alerts',
@@ -147,6 +168,15 @@ const MAIN_SCHEMA = [
 ];
 
 export class PetkitPuramaxCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    // Which info_row/controls_row indices are showing their full field set
+    // instead of the collapsed icon+name summary -- pure UI state, not part
+    // of config, so it survives `setConfig()` round-trips untouched.
+    this._expandedInfoRows = new Set();
+    this._expandedControlRows = new Set();
+  }
+
   // The dashboard host calls `setConfig()` again on every `config-changed`
   // round-trip we ourselves fire -- i.e. on every value edit, not just when
   // a genuinely different card config is assigned. A full `_render()` there
@@ -229,24 +259,43 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     });
   }
 
-  // Pushes updated data onto already-built form nodes in place, the same
-  // no-rebuild approach the `hass` setter above already uses -- for the
-  // common case of a plain value edit (add/remove still goes through a full
-  // `_render()`, since section counts genuinely changed).
+  // Pushes updated data onto already-built form/summary nodes in place, the
+  // same no-rebuild approach the `hass` setter above already uses -- for
+  // the common case of a plain value edit (add/remove, and an info/controls
+  // row changing mode, still go through a full render).
   _updateFormsInPlace() {
     if (this._mainForm) this._mainForm.data = this._config;
     const cats = this._config.cats || [];
-    (this._catForms || []).forEach((form, i) => {
+    (this._catNameForms || []).forEach((form, i) => {
+      if (cats[i]) form.data = cats[i];
+    });
+    (this._catColorForms || []).forEach((form, i) => {
       if (cats[i]) form.data = cats[i];
     });
     const infoRows = this._config.info_row || [];
-    (this._infoForms || []).forEach((form, i) => {
-      if (infoRows[i]) form.data = infoRows[i];
-    });
+    (this._infoRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, infoRows[i], 'info'));
     const controlsRows = this._config.controls_row || [];
-    (this._controlForms || []).forEach((form, i) => {
-      if (controlsRows[i]) form.data = controlsRows[i];
-    });
+    (this._controlRowRefs || []).forEach((ref, i) => this._refreshRowRef(ref, controlsRows[i], 'control'));
+  }
+
+  // A summary row has no input to lose focus from, so it's always safe to
+  // just refresh its text/icon in place; a minimal/full row's live ha-form
+  // gets its data pushed the same way the rest of this editor already does.
+  _refreshRowRef(ref, spec, kind) {
+    if (!ref || !spec) return;
+    if (ref.form) ref.form.data = spec;
+    if (ref.labelEl) ref.labelEl.textContent = this._summaryLabel(spec, kind);
+    if (ref.iconEl) ref.iconEl.setAttribute('icon', this._summaryIcon(spec, kind));
+  }
+
+  _summaryLabel(spec, kind) {
+    if (spec.name) return spec.name;
+    if (kind === 'info') return spec.entity || '';
+    return spec.entity || spec.start_entity || spec.action || '';
+  }
+
+  _summaryIcon(spec, kind) {
+    return spec.icon || (kind === 'info' ? DEFAULT_INFO_ICON : DEFAULT_CONTROL_ICON);
   }
 
   _render() {
@@ -254,9 +303,8 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     if (!this._config) return;
     const prevExpanded = this._capturePanelExpanded();
     this._formEls = [];
-    this._catForms = [];
-    this._infoForms = [];
-    this._controlForms = [];
+    this._catNameForms = [];
+    this._catColorForms = [];
     const catCount = (this._config.cats || []).length;
     const infoCount = (this._config.info_row || []).length;
     const controlCount = (this._config.controls_row || []).length;
@@ -267,6 +315,15 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
         .panel-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 16px; }
         .row { display: flex; align-items: center; gap: 4px; }
         .row ha-form { flex: 1 1 auto; min-width: 0; }
+        .summary-row { padding: 0 4px; }
+        .summary-row ha-icon { color: var(--secondary-text-color); flex: 0 0 auto; }
+        .summary-label {
+          flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap; color: var(--primary-text-color);
+        }
+        #cats-rows { display: flex; flex-direction: column; gap: 12px; }
+        .cat-item { display: flex; flex-direction: column; gap: 4px; }
+        #info-rows, #controls-rows { display: flex; flex-direction: column; gap: 4px; }
         .add-row { display: flex; justify-content: flex-start; margin-top: 4px; }
         .add-btn {
           display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
@@ -329,18 +386,29 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this.shadowRoot.getElementById('add-control-row').addEventListener('click', () => this._addControlRow());
   }
 
-  // Builds a row's trailing "remove" affordance as a native icon button
-  // (matching how HA's own settings lists remove an item) instead of a
-  // hand-styled text button.
-  _removeIconButton(onClick) {
+  // Trailing row affordances as native icon buttons (matching how HA's own
+  // settings lists act on an item) instead of hand-styled text buttons.
+  _iconButton(icon, label, className, onClick) {
     const btn = /** @type {any} */ (document.createElement('ha-icon-button'));
-    btn.className = 'remove-btn';
-    btn.label = 'Remove';
-    const icon = document.createElement('ha-icon');
-    icon.setAttribute('icon', 'mdi:delete-outline');
-    btn.appendChild(icon);
+    btn.className = className;
+    btn.label = label;
+    const iconEl = document.createElement('ha-icon');
+    iconEl.setAttribute('icon', icon);
+    btn.appendChild(iconEl);
     btn.addEventListener('click', onClick);
     return btn;
+  }
+
+  _removeIconButton(onClick) {
+    return this._iconButton('mdi:delete-outline', 'Remove', 'remove-btn', onClick);
+  }
+
+  _editIconButton(onClick) {
+    return this._iconButton('mdi:pencil-outline', 'Edit', 'edit-btn', onClick);
+  }
+
+  _collapseIconButton(onClick) {
+    return this._iconButton('mdi:check', 'Done', 'collapse-btn', onClick);
   }
 
   _renderCats() {
@@ -348,25 +416,41 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     container.innerHTML = '';
     const cats = this._config.cats || [];
     cats.forEach((cat, index) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.dataset.index = String(index);
+      const item = document.createElement('div');
+      item.className = 'cat-item';
+      item.dataset.index = String(index);
 
-      const form = /** @type {any} */ (document.createElement('ha-form'));
-      form.schema = CAT_SCHEMA;
-      form.data = cat;
-      form.hass = this._hass;
-      form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-      form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+      const nameRow = document.createElement('div');
+      nameRow.className = 'row';
+      const nameForm = /** @type {any} */ (document.createElement('ha-form'));
+      nameForm.schema = CAT_NAME_SCHEMA;
+      nameForm.data = cat;
+      nameForm.hass = this._hass;
+      nameForm.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+      nameForm.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
         ev.stopPropagation();
-        this._updateCat(index, ev.detail.value);
+        this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
       });
-      this._formEls.push(form);
-      this._catForms.push(form);
+      this._formEls.push(nameForm);
+      this._catNameForms.push(nameForm);
+      nameRow.appendChild(nameForm);
+      nameRow.appendChild(this._removeIconButton(() => this._removeCat(index)));
 
-      row.appendChild(form);
-      row.appendChild(this._removeIconButton(() => this._removeCat(index)));
-      container.appendChild(row);
+      const colorForm = /** @type {any} */ (document.createElement('ha-form'));
+      colorForm.schema = CAT_COLOR_SCHEMA;
+      colorForm.data = cat;
+      colorForm.hass = this._hass;
+      colorForm.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+      colorForm.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+        ev.stopPropagation();
+        this._updateCat(index, { ...this._config.cats[index], ...ev.detail.value });
+      });
+      this._formEls.push(colorForm);
+      this._catColorForms.push(colorForm);
+
+      item.appendChild(nameRow);
+      item.appendChild(colorForm);
+      container.appendChild(item);
     });
   }
 
@@ -388,30 +472,52 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     this._render();
   }
 
+  // ---------- info_row: minimal (pick entity) -> summary -> full (Edit) ----------
+
   _renderInfoRows() {
     const container = this.shadowRoot.getElementById('info-rows');
     container.innerHTML = '';
+    this._infoRowRefs = [];
     const rows = this._config.info_row || [];
     rows.forEach((spec, index) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.dataset.index = String(index);
+      const { el, ref } = this._buildInfoRow(spec, index);
+      this._infoRowRefs[index] = ref;
+      container.appendChild(el);
+    });
+  }
 
-      const form = /** @type {any} */ (document.createElement('ha-form'));
-      form.schema = INFO_ROW_SCHEMA;
-      form.data = spec;
-      form.hass = this._hass;
-      form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-      form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-        ev.stopPropagation();
-        this._updateInfoRow(index, ev.detail.value);
+  _buildInfoRow(spec, index) {
+    if (!hasInfoEntity(spec)) {
+      return this._buildMinimalRow({
+        schema: INFO_ROW_MINIMAL_SCHEMA,
+        spec,
+        onChange: (value) => {
+          this._updateInfoRow(index, { ...spec, ...value });
+          this._renderInfoRows();
+        },
+        onRemove: () => this._removeInfoRow(index),
       });
-      this._formEls.push(form);
-      this._infoForms.push(form);
-
-      row.appendChild(form);
-      row.appendChild(this._removeIconButton(() => this._removeInfoRow(index)));
-      container.appendChild(row);
+    }
+    if (this._expandedInfoRows.has(index)) {
+      return this._buildFullRow({
+        schema: INFO_ROW_SCHEMA,
+        spec,
+        onChange: (value) => this._updateInfoRow(index, value),
+        onCollapse: () => {
+          this._expandedInfoRows.delete(index);
+          this._renderInfoRows();
+        },
+        onRemove: () => this._removeInfoRow(index),
+      });
+    }
+    return this._buildSummaryRow({
+      spec,
+      kind: 'info',
+      onEdit: () => {
+        this._expandedInfoRows.add(index);
+        this._renderInfoRows();
+      },
+      onRemove: () => this._removeInfoRow(index),
     });
   }
 
@@ -429,35 +535,57 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
 
   _removeInfoRow(index) {
     const infoRow = (this._config.info_row || []).filter((_spec, i) => i !== index);
+    this._expandedInfoRows = reindexAfterRemoval(this._expandedInfoRows, index);
     this._fireConfigChanged({ ...this._config, info_row: infoRow });
     this._render();
   }
 
+  // ---------- controls_row: minimal (pick entity) -> summary -> full (Edit) ----------
+
   _renderControlsRows() {
     const container = this.shadowRoot.getElementById('controls-rows');
     container.innerHTML = '';
-    this._controlForms = [];
+    this._controlRowRefs = [];
     const rows = this._config.controls_row || [];
     rows.forEach((spec, index) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.dataset.index = String(index);
+      const { el, ref } = this._buildControlRow(spec, index);
+      this._controlRowRefs[index] = ref;
+      container.appendChild(el);
+    });
+  }
 
-      const form = /** @type {any} */ (document.createElement('ha-form'));
-      form.schema = controlsRowSchema(spec.action);
-      form.data = spec;
-      form.hass = this._hass;
-      form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
-      form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
-        ev.stopPropagation();
-        this._updateControlRow(index, ev.detail.value);
+  _buildControlRow(spec, index) {
+    if (!hasControlPrimary(spec)) {
+      return this._buildMinimalRow({
+        schema: CONTROLS_ROW_MINIMAL_SCHEMA,
+        spec,
+        onChange: (value) => {
+          this._updateControlRow(index, { ...spec, ...value });
+          this._renderControlsRows();
+        },
+        onRemove: () => this._removeControlRow(index),
       });
-      this._formEls.push(form);
-      this._controlForms.push(form);
-
-      row.appendChild(form);
-      row.appendChild(this._removeIconButton(() => this._removeControlRow(index)));
-      container.appendChild(row);
+    }
+    if (this._expandedControlRows.has(index)) {
+      return this._buildFullRow({
+        schema: controlsRowSchema(spec.action),
+        spec,
+        onChange: (value) => this._updateControlRow(index, value),
+        onCollapse: () => {
+          this._expandedControlRows.delete(index);
+          this._renderControlsRows();
+        },
+        onRemove: () => this._removeControlRow(index),
+      });
+    }
+    return this._buildSummaryRow({
+      spec,
+      kind: 'control',
+      onEdit: () => {
+        this._expandedControlRows.add(index);
+        this._renderControlsRows();
+      },
+      onRemove: () => this._removeControlRow(index),
     });
   }
 
@@ -485,8 +613,63 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
 
   _removeControlRow(index) {
     const controlsRow = (this._config.controls_row || []).filter((_spec, i) => i !== index);
+    this._expandedControlRows = reindexAfterRemoval(this._expandedControlRows, index);
     this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
     this._render();
+  }
+
+  // ---------- shared row builders (info_row + controls_row) ----------
+
+  _buildMinimalRow({ schema, spec, onChange, onRemove }) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const form = /** @type {any} */ (document.createElement('ha-form'));
+    form.schema = schema;
+    form.data = spec;
+    form.hass = this._hass;
+    form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+    form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+      ev.stopPropagation();
+      onChange(ev.detail.value);
+    });
+    this._formEls.push(form);
+    row.appendChild(form);
+    row.appendChild(this._removeIconButton(onRemove));
+    return { el: row, ref: { mode: 'minimal', form } };
+  }
+
+  _buildFullRow({ schema, spec, onChange, onCollapse, onRemove }) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const form = /** @type {any} */ (document.createElement('ha-form'));
+    form.schema = schema;
+    form.data = spec;
+    form.hass = this._hass;
+    form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
+    form.addEventListener('value-changed', (/** @type {CustomEvent} */ ev) => {
+      ev.stopPropagation();
+      onChange(ev.detail.value);
+    });
+    this._formEls.push(form);
+    row.appendChild(form);
+    row.appendChild(this._collapseIconButton(onCollapse));
+    row.appendChild(this._removeIconButton(onRemove));
+    return { el: row, ref: { mode: 'full', form } };
+  }
+
+  _buildSummaryRow({ spec, kind, onEdit, onRemove }) {
+    const row = document.createElement('div');
+    row.className = 'row summary-row';
+    const icon = document.createElement('ha-icon');
+    icon.setAttribute('icon', this._summaryIcon(spec, kind));
+    const label = document.createElement('span');
+    label.className = 'summary-label';
+    label.textContent = this._summaryLabel(spec, kind);
+    row.appendChild(icon);
+    row.appendChild(label);
+    row.appendChild(this._editIconButton(onEdit));
+    row.appendChild(this._removeIconButton(onRemove));
+    return { el: row, ref: { mode: 'summary', iconEl: icon, labelEl: label } };
   }
 
   _renderMainForm() {
@@ -495,10 +678,10 @@ export class PetkitPuramaxCardEditor extends HTMLElement {
     // DOM type — its properties are set dynamically, hence the `any` cast.
     const form = /** @type {any} */ (document.createElement('ha-form'));
     form.schema = MAIN_SCHEMA;
-    // Bound directly to the full config -- `ha-form` nests `device_entities`
-    // and reads/writes `alerts` (flattened) correctly on its own (see the
-    // class header comment). Keys outside MAIN_SCHEMA (cats/info_row/
-    // controls_row) round-trip untouched via ha-form's own data merge.
+    // Bound directly to the full config -- `ha-form` reads/writes `alerts`
+    // (flattened) correctly on its own (see the class header comment). Keys
+    // outside MAIN_SCHEMA (cats/info_row/controls_row/device_entities)
+    // round-trip untouched via ha-form's own data merge.
     form.data = this._config;
     form.hass = this._hass;
     form.computeLabel = (schemaItem) => schemaItem.label || schemaItem.name;
