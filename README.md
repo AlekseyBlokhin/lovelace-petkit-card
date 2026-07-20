@@ -54,8 +54,13 @@ extra to set up.
 
 ## Prerequisites
 
-- **A PetKit Home Assistant integration**, already installed and configured, exposing your device's entities — either [`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit) or [`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit). This card only reads entities; it doesn't talk to PetKit's API itself, and doesn't care which of the two integrations provided them.
-- **No other custom Lovelace cards are required.** This card and its visual editor are self-contained — you don't need `card-mod`, `auto-entities`, or anything else installed for it to work.
+A PetKit Home Assistant integration, already installed and configured,
+exposing your device's entities — either
+[`RobertD502/home-assistant-petkit`](https://github.com/RobertD502/home-assistant-petkit)
+or
+[`Jezza34000/homeassistant_petkit`](https://github.com/Jezza34000/homeassistant_petkit).
+This card only reads entities; it doesn't talk to PetKit's API itself, and
+doesn't care which of the two integrations provided them.
 
 ## Installation
 
