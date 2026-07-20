@@ -1,6 +1,6 @@
 # Full example configuration for the petkit-puramax-card, referenced from
-# README.md's configuration reference. Every entity id below is a
-# placeholder — replace them with your own PETKIT PURAMAX entities.
+# README.md's configuration reference. Every entity id/device id below is a
+# placeholder — replace them with your own PETKIT PURAMAX device/entities.
 #
 # See README.md's "How per-cat visit reconstruction works" section for how
 # total_use/last_used_by are turned into per-cat visit history -- no helper
@@ -9,12 +9,19 @@
 type: custom:petkit-puramax-card
 title: PETKIT PURAMAX
 
-device_entities:
-  total_use: sensor.petkit_puramax_total_use
-  last_used_by: sensor.petkit_puramax_last_used_by
-  error: sensor.petkit_puramax_error
-  last_event: sensor.petkit_puramax_last_event
-  state: sensor.petkit_puramax_state
+# Auto-detects total_use/last_used_by/error/last_event/state from this
+# device's own entity registry. Pick it via the visual editor's native
+# device selector, or find its id under Settings -> Devices & services.
+device_id: 400018390abc123
+
+# Only needed if you're not using device_id, or want to override one of the
+# auto-detected entities:
+# device_entities:
+#   total_use: sensor.petkit_puramax_total_use
+#   last_used_by: sensor.petkit_puramax_last_used_by
+#   error: sensor.petkit_puramax_error
+#   last_event: sensor.petkit_puramax_last_event
+#   state: sensor.petkit_puramax_state
 
 # Optional: relabel or add device event states without editing the card.
 # Merged over the built-in PURAMAX defaults (this config wins on conflicts).

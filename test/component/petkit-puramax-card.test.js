@@ -142,6 +142,96 @@ describe('PetkitPuramaxCard: getStubConfig', () => {
   });
 });
 
+describe('PetkitPuramaxCard: device_id resolution', () => {
+  const DEVICE_ID = 'dev1';
+
+  function deviceEntities(overrides = {}) {
+    const specs = {
+      'sensor.petkit_total_use': 'total_use',
+      'sensor.petkit_last_used_by': 'last_used_by',
+      'sensor.petkit_error': 'error',
+      'sensor.petkit_last_event': 'max_last_event',
+      'sensor.petkit_state': 'max_work_state',
+      ...overrides,
+    };
+    const entities = {};
+    for (const [entityId, translationKey] of Object.entries(specs)) {
+      if (translationKey === null) continue;
+      entities[entityId] = { entity_id: entityId, device_id: DEVICE_ID, translation_key: translationKey };
+    }
+    return entities;
+  }
+
+  function makeHassWithRegistry(states, entities) {
+    return { ...makeHass(states), entities };
+  }
+
+  it('accepts a device_id-only config (no device_entities) without throwing', () => {
+    const card = makeCard();
+    expect(() =>
+      card.setConfig({ type: 'custom:petkit-puramax-card', device_id: DEVICE_ID, cats: [{ name: 'A', color: '#fff' }] }),
+    ).not.toThrow();
+  });
+
+  it('resolves device_entities from the entity registry via translation_key and uses them', async () => {
+    const card = makeCard();
+    card.setConfig({ type: 'custom:petkit-puramax-card', device_id: DEVICE_ID, cats: [{ name: 'A', color: '#fff' }] });
+    const hass = makeHassWithRegistry(
+      { 'sensor.petkit_error': { state: 'no_error' } },
+      deviceEntities(),
+    );
+    card.hass = hass;
+    await flush();
+    expect(card.shadowRoot.querySelector('ha-alert')).toBeNull();
+    const calledEntityIds = hass.callWS.mock.calls.flatMap((call) => call[0].entity_ids || []);
+    expect(calledEntityIds).toContain('sensor.petkit_total_use');
+  });
+
+  it('renders an in-card error when device_id cannot resolve a total_use sensor', async () => {
+    const card = makeCard();
+    card.setConfig({ type: 'custom:petkit-puramax-card', device_id: DEVICE_ID, cats: [{ name: 'A', color: '#fff' }] });
+    card.hass = makeHassWithRegistry({}, {});
+    await flush();
+    const alert = card.shadowRoot.querySelector('ha-alert');
+    expect(alert).not.toBeNull();
+    expect(alert.textContent).toContain('Could not auto-detect');
+  });
+
+  it('renders an in-card error when more than one cat is configured but last_used_by cannot be resolved', async () => {
+    const card = makeCard();
+    card.setConfig({
+      type: 'custom:petkit-puramax-card',
+      device_id: DEVICE_ID,
+      cats: [
+        { name: 'A', color: '#fff' },
+        { name: 'B', color: '#000' },
+      ],
+    });
+    card.hass = makeHassWithRegistry({}, deviceEntities({ 'sensor.petkit_last_used_by': null }));
+    await flush();
+    const alert = card.shadowRoot.querySelector('ha-alert');
+    expect(alert).not.toBeNull();
+    expect(alert.textContent).toContain('last used by');
+  });
+
+  it('an explicit device_entities entry overrides the auto-detected one', async () => {
+    const card = makeCard();
+    card.setConfig({
+      type: 'custom:petkit-puramax-card',
+      device_id: DEVICE_ID,
+      device_entities: { total_use: 'sensor.manual_override_total_use' },
+      cats: [{ name: 'A', color: '#fff' }],
+    });
+    const hass = makeHassWithRegistry({ 'sensor.petkit_error': { state: 'no_error' } }, deviceEntities());
+    card.hass = hass;
+    await flush();
+    expect(card.shadowRoot.querySelector('ha-alert')).toBeNull();
+    const calledEntityIds = hass.callWS.mock.calls.flatMap((call) => call[0].entity_ids || []);
+    expect(calledEntityIds).toContain('sensor.manual_override_total_use');
+    expect(calledEntityIds).not.toContain('sensor.petkit_total_use');
+  });
+});
+
 describe('PetkitPuramaxCard: rendering', () => {
   let card;
 
@@ -211,6 +301,59 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(warnChips.length).toBe(1);
     expect(card.shadowRoot.querySelector('.chip-value b')).toBeNull();
     expect(warnChips[0].querySelector('.chip-value').textContent).toBe('"><b>pwned</b>');
+  });
+
+  it('dispatches hass-more-info when a status chip is clicked', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80' },
+    });
+    await flush();
+    const listener = vi.fn();
+    card.addEventListener('hass-more-info', listener);
+    const chip = card.shadowRoot.querySelector('.chip[data-entity="sensor.consumable"]');
+    chip.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0].detail).toEqual({ entityId: 'sensor.consumable' });
+  });
+
+  it('dispatches hass-more-info when the device-error chip is clicked', async () => {
+    const cfg = baseConfig();
+    card.setConfig(cfg);
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'bin_full' } });
+    await flush();
+    const listener = vi.fn();
+    card.addEventListener('hass-more-info', listener);
+    const chip = card.shadowRoot.querySelector('.chip.warn[data-entity="sensor.test_petkit_error"]');
+    chip.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0].detail).toEqual({ entityId: 'sensor.test_petkit_error' });
+  });
+
+  it('a status chip survives a live-value re-render and stays tappable', async () => {
+    // statusRow.innerHTML is rebuilt on every _updateLiveValues() call (see
+    // the chip-tap wiring's own comment) -- the click listener must be
+    // delegated to the stable container, not attached per-chip, or a chip
+    // rebuilt after the first hass update would go dead.
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80' },
+    });
+    await flush();
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '81' },
+    });
+    await flush();
+    const listener = vi.fn();
+    card.addEventListener('hass-more-info', listener);
+    const chip = card.shadowRoot.querySelector('.chip[data-entity="sensor.consumable"]');
+    chip.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it('renders one button per controls_row entry', async () => {

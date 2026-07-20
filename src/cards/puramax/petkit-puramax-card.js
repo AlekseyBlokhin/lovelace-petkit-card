@@ -5,6 +5,7 @@ import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
 import { getState, fireMoreInfo, callService, pressButton } from '../../lib/ha-helpers.js';
+import { resolveDeviceEntities } from '../../lib/device-entities.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
@@ -69,11 +70,18 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!config) {
       throw new Error('petkit-puramax-card: config is required');
     }
-    if (!config.device_entities) {
-      throw new Error('petkit-puramax-card: "device_entities" is required in config');
+    // `device_id` lets total_use/last_used_by/error/last_event/state be
+    // auto-detected from the device's entity registry (see
+    // `resolveDeviceEntities`) instead of hand-typed -- so when it's set,
+    // `device_entities` is optional and its presence/contents can only be
+    // fully validated once `hass` (and its entity registry) is available;
+    // see `_configError()`, checked on first build.
+    if (!config.device_id && !config.device_entities) {
+      throw new Error('petkit-puramax-card: "device_entities" is required in config (or set "device_id")');
     }
-    if (!config.device_entities.total_use) {
-      throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config');
+    config.device_entities = config.device_entities || {};
+    if (!config.device_id && !config.device_entities.total_use) {
+      throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config (or set "device_id")');
     }
     if (!config.cats) {
       throw new Error('petkit-puramax-card: "cats" is required in config');
@@ -84,9 +92,9 @@ export class PetkitPuramaxCard extends HTMLElement {
     // With a single cat, every visit is trivially theirs -- no need to know
     // which cat used the box, so last_used_by isn't required until there's
     // an actual ambiguity to resolve.
-    if (config.cats.length > 1 && !config.device_entities.last_used_by) {
+    if (!config.device_id && config.cats.length > 1 && !config.device_entities.last_used_by) {
       throw new Error(
-        'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured',
+        'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured (or set "device_id")',
       );
     }
     config.cats.forEach((cat, i) => {
@@ -104,19 +112,47 @@ export class PetkitPuramaxCard extends HTMLElement {
     this._chartData = null;
     this._loadingChart = false;
     this._loadingAnalytics = false;
+    this._deviceEntities = this._resolveDeviceEntities();
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     this._render();
+  }
+
+  // Explicit `device_entities` always wins over what's auto-detected from
+  // `device_id` -- so an integration this card doesn't know the
+  // translation_keys for, or a future upstream rename, degrades to "set it
+  // manually" rather than silently resolving to the wrong entity.
+  _resolveDeviceEntities() {
+    return {
+      ...resolveDeviceEntities(this._hass, this._config.device_id),
+      ...this._config.device_entities,
+    };
+  }
+
+  // Only meaningful when `device_id` is set -- the non-device_id path is
+  // already fully validated synchronously in `setConfig`.
+  _configError() {
+    if (!this._config.device_id) return null;
+    if (!this._deviceEntities.total_use) {
+      return 'Could not auto-detect a "total use" sensor on the selected device. Set "device_entities.total_use" in the config to override.';
+    }
+    if (this._config.cats.length > 1 && !this._deviceEntities.last_used_by) {
+      return 'Could not auto-detect a "last used by" sensor on the selected device (required for more than one cat). Set "device_entities.last_used_by" in the config to override.';
+    }
+    return null;
+  }
+
+  _renderError(message) {
+    if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
+    this.shadowRoot.innerHTML = `<ha-card><div style="padding: 16px;"><ha-alert alert-type="error">${escapeHtml(message)}</ha-alert></div></ha-card>`;
   }
 
   set hass(hass) {
     const prevHass = this._hass;
     this._hass = hass;
+    this._deviceEntities = this._resolveDeviceEntities();
     if (!this._built) {
       this._built = true;
-      this._render();
-      this._loadDay();
-      this._loadAnalytics();
-      this._startNoVisitTimer();
+      this._build();
       return;
     }
     this._updateLiveValues();
@@ -131,13 +167,22 @@ export class PetkitPuramaxCard extends HTMLElement {
     return 14;
   }
 
+  _build() {
+    const err = this._configError();
+    if (err) {
+      this._renderError(err);
+      return;
+    }
+    this._render();
+    this._loadDay();
+    this._loadAnalytics();
+    this._startNoVisitTimer();
+  }
+
   connectedCallback() {
     if (this._hass && !this._built) {
       this._built = true;
-      this._render();
-      this._loadDay();
-      this._loadAnalytics();
-      this._startNoVisitTimer();
+      this._build();
     }
   }
 
@@ -163,7 +208,7 @@ export class PetkitPuramaxCard extends HTMLElement {
   // stale until re-fetched — so watch for it and refresh.
   _maybeRefreshOnNewVisit(prevHass) {
     if (!prevHass) return;
-    const eid = this._config.device_entities.total_use;
+    const eid = this._deviceEntities.total_use;
     const prev = prevHass.states[eid];
     const curr = this._hass.states[eid];
     const changed = curr && (!prev || prev.last_changed !== curr.last_changed);
@@ -194,10 +239,11 @@ export class PetkitPuramaxCard extends HTMLElement {
   //    and why a fixed tolerance window can't safely cover both.
   async _fetchVisits({ start, end }) {
     const cfg = this._config;
+    const de = this._deviceEntities;
     const totalUseReq = buildHistoryRequest({
       startTime: start,
       endTime: end,
-      entityIds: [cfg.device_entities.total_use],
+      entityIds: [de.total_use],
     });
     const requests = [this._hass.callWS(totalUseReq)];
     if (cfg.cats.length > 1) {
@@ -210,7 +256,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       const lastUsedByReq = buildHistoryRequest({
         startTime: start,
         endTime: end,
-        entityIds: [cfg.device_entities.last_used_by],
+        entityIds: [de.last_used_by],
         includeStartTimeState: true,
       });
       requests.push(this._hass.callWS(lastUsedByReq));
@@ -226,7 +272,7 @@ export class PetkitPuramaxCard extends HTMLElement {
       // leave both as {}
     }
 
-    const durationEvents = deltaEvents(totalUseResult[cfg.device_entities.total_use], {
+    const durationEvents = deltaEvents(totalUseResult[de.total_use], {
       minDelta: 0,
       maxDelta: MAX_VALID_VISIT_SECONDS,
     });
@@ -234,7 +280,7 @@ export class PetkitPuramaxCard extends HTMLElement {
     let attributed;
     if (cfg.cats.length > 1) {
       const knownNames = cfg.cats.map((c) => c.name);
-      const catEvents = catChangeEvents(lastUsedByResult[cfg.device_entities.last_used_by], knownNames);
+      const catEvents = catChangeEvents(lastUsedByResult[de.last_used_by], knownNames);
       attributed = attributeCats(durationEvents, catEvents);
     } else {
       attributed = durationEvents.map((e) => ({ ...e, cat: cfg.cats[0].name }));
@@ -272,21 +318,19 @@ export class PetkitPuramaxCard extends HTMLElement {
     if (!this._hass) return;
     this._loadingChart = true;
     this._renderChartArea();
-    const cfg = this._config;
+    const de = this._deviceEntities;
     const { start, end } = dayBounds(this._dayOffset);
     let visits = [];
     let eventHist = [];
     try {
       const [visitsResult, eventResult] = await Promise.all([
         this._fetchVisits({ start, end }),
-        cfg.device_entities.last_event
-          ? this._hass.callWS(
-              buildHistoryRequest({ startTime: start, endTime: end, entityIds: [cfg.device_entities.last_event] }),
-            )
+        de.last_event
+          ? this._hass.callWS(buildHistoryRequest({ startTime: start, endTime: end, entityIds: [de.last_event] }))
           : Promise.resolve({}),
       ]);
       visits = visitsResult;
-      eventHist = (eventResult || {})[cfg.device_entities.last_event] || [];
+      eventHist = (eventResult || {})[de.last_event] || [];
     } catch (_e) {
       visits = [];
       eventHist = [];
@@ -425,7 +469,7 @@ export class PetkitPuramaxCard extends HTMLElement {
   _updateLiveValues() {
     if (!this._built) return;
     const cfg = this._config;
-    const de = cfg.device_entities;
+    const de = this._deviceEntities;
 
     // status row: fully config-driven — add/remove/reorder chips via `info_row` in YAML
     const statusRow = this.shadowRoot.getElementById('status-row');
@@ -435,8 +479,24 @@ export class PetkitPuramaxCard extends HTMLElement {
       const infoRow = cfg.info_row || [];
       statusRow.innerHTML = [
         ...infoRow.map((spec) => this._renderInfoChip(spec)),
-        hasError ? this._chip('mdi:alert', 'Error', errorState.replace(/_/g, ' '), true) : '',
+        hasError ? this._chip('mdi:alert', 'Error', errorState.replace(/_/g, ' '), true, de.error) : '',
       ].join('');
+      if (!statusRow.dataset.bound) {
+        statusRow.dataset.bound = '1';
+        // Delegated (not per-chip) so it survives `statusRow.innerHTML` being
+        // rebuilt on every live-value update above.
+        const openChip = (ev) => {
+          const chip = ev.target.closest('.chip[data-entity]');
+          if (chip) fireMoreInfo(this, chip.dataset.entity);
+        };
+        statusRow.addEventListener('click', openChip);
+        statusRow.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            openChip(ev);
+          }
+        });
+      }
     }
 
     // controls row: fully config-driven — add/remove/reorder buttons via `controls_row` in YAML
@@ -465,7 +525,7 @@ export class PetkitPuramaxCard extends HTMLElement {
   _renderInfoChip(spec) {
     const rawValue = this._s(spec.entity, null);
     const { display, warn } = computeChipDisplay(spec, rawValue);
-    return this._chip(spec.icon || 'mdi:information-outline', spec.name || spec.entity, display, warn);
+    return this._chip(spec.icon || 'mdi:information-outline', spec.name || spec.entity, display, warn, spec.entity);
   }
 
   _runControlAction(spec) {
@@ -479,7 +539,7 @@ export class PetkitPuramaxCard extends HTMLElement {
         break;
       }
       case 'toggle_maintenance': {
-        const stateEntity = spec.state_entity || this._config.device_entities.state;
+        const stateEntity = spec.state_entity || this._deviceEntities.state;
         const state = this._s(stateEntity, '');
         if (state === 'maintenance') pressButton(this._hass, spec.exit_entity);
         else pressButton(this._hass, spec.start_entity);
@@ -498,11 +558,14 @@ export class PetkitPuramaxCard extends HTMLElement {
     }
   }
 
-  _chip(icon, label, value, warn) {
+  _chip(icon, label, value, warn, entityId) {
     // icon/label are config-provided, value is often a live entity state --
     // escape all three, since none are guaranteed free of HTML metacharacters.
+    // Tappable (opens the entity's native more-info dialog, like a built-in
+    // badge/entity row) whenever it's backed by a real entity.
+    const tapAttrs = entityId ? ` data-entity="${escapeHtml(entityId)}" tabindex="0"` : '';
     return `
-      <div class="chip ${warn ? 'warn' : ''}">
+      <div class="chip ${warn ? 'warn' : ''} ${entityId ? 'tappable' : ''}"${tapAttrs}>
         <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
         <div class="chip-text"><div class="chip-label">${escapeHtml(label)}</div><div class="chip-value">${escapeHtml(value)}</div></div>
       </div>`;

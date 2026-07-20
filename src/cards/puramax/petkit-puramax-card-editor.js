@@ -87,25 +87,30 @@ function controlsRowSchema(action) {
 const DEFAULT_NEW_CONTROL_ROW = { name: '', icon: 'mdi:gesture-tap-button', action: 'press', entity: '' };
 
 const MAIN_SCHEMA = [
+  {
+    name: 'device_id',
+    label: 'PetKit device (auto-detects the sensors below)',
+    selector: { device: { filter: { integration: 'petkit' } } },
+  },
   { name: 'title', label: 'Title', selector: { text: {} } },
   {
     name: 'device_entities',
     type: 'expandable',
-    title: 'Device entities',
+    title: 'Device entities (overrides)',
     schema: [
       {
         name: 'total_use',
-        label: 'Total use sensor (required)',
+        label: 'Total use sensor (required unless a device is selected above)',
         selector: { entity: {} },
       },
       {
         name: 'last_used_by',
-        label: 'Last used by sensor (required if more than one cat)',
+        label: 'Last used by sensor (required if more than one cat, unless auto-detected)',
         selector: { entity: {} },
       },
-      { name: 'error', label: 'Error sensor', selector: { entity: {} } },
-      { name: 'last_event', label: 'Last event sensor', selector: { entity: {} } },
-      { name: 'state', label: 'State sensor', selector: { entity: {} } },
+      { name: 'error', label: 'Error sensor (auto-detected, or override)', selector: { entity: {} } },
+      { name: 'last_event', label: 'Last event sensor (auto-detected, or override)', selector: { entity: {} } },
+      { name: 'state', label: 'State sensor (auto-detected, or override)', selector: { entity: {} } },
     ],
   },
   {

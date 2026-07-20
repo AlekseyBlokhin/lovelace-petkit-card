@@ -32,7 +32,13 @@ extra to set up.
 
 - Device status chips and control buttons, both fully config-driven
   (`info_row` / `controls_row` arrays — add, remove, or reorder them purely
-  in YAML, no code changes).
+  in YAML, no code changes). Tapping a status chip opens that entity's
+  native Home Assistant more-info dialog, the same as tapping a built-in
+  badge or entity row.
+- Point it at your PetKit device once (`device_id`, picked from a native
+  device selector) and it auto-detects the sensors it needs from the
+  device's own entity registry — no hunting down and typing in five entity
+  ids by hand.
 - A day-switchable per-cat visit chart (a 0-24h "stem plot"). A visit the
   device itself couldn't identify a cat for plots as a neutral gray
   "Unknown" stem rather than being dropped.
@@ -102,6 +108,21 @@ documented default:
 
 ```yaml
 type: custom:petkit-puramax-card
+device_id: <your PetKit device>
+cats:
+  - name: Whiskers
+    color: "#4fc3f7"
+```
+
+`device_id` (pick it from a native device picker in the visual editor)
+auto-detects `total_use`/`last_used_by`/`error`/`last_event`/`state` from
+your PetKit device's own entity registry — no need to look up and type in
+each entity id by hand. If you'd rather wire them up explicitly (or the
+auto-detection misses one), skip `device_id` and use `device_entities`
+instead:
+
+```yaml
+type: custom:petkit-puramax-card
 device_entities:
   total_use: sensor.petkit_puramax_total_use
 cats:
@@ -122,7 +143,8 @@ or a full example at
 |---|---|---|---|---|
 | `type` | yes | string | — | Must be `custom:petkit-puramax-card`. |
 | `title` | no | string | `"PETKIT PURAMAX"` | Card header title. |
-| `device_entities` | yes | object | — | See [`device_entities`](#device_entities) below. |
+| `device_id` | one of `device_id`/`device_entities.total_use` required | device id | — | Your PetKit device (native device picker in the visual editor). Auto-detects `device_entities.{total_use,last_used_by,error,last_event,state}` from the device's entity registry, by matching each sensor's stable `translation_key` — works regardless of what you've renamed the `entity_id`/friendly name to. Any key also set explicitly in `device_entities` overrides the auto-detected one. If a required sensor (`total_use`, or `last_used_by` when there's more than one cat) can't be auto-detected and isn't overridden, the card shows an in-card error naming the missing sensor. |
+| `device_entities` | one of `device_id`/`device_entities.total_use` required | object | — | See [`device_entities`](#device_entities) below. Optional (and acts only as an override on top of `device_id`'s auto-detection) once `device_id` is set. |
 | `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
 | `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
 | `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for ([`device_entities.last_used_by`](#device_entities) reporting PURAMAX's `unknown_pet` placeholder). Unrelated to [Working Records](./docs/ARCHITECTURE.md#how-working-records-works), which never inspects visit identity. |
@@ -135,10 +157,14 @@ or a full example at
 
 ### `device_entities`
 
+Every key here is auto-detected once `device_id` is set (see above) — only
+set a key explicitly if you want to override what was auto-detected, or
+you're not using `device_id` at all.
+
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
-| `total_use` | yes | entity id | — | The sensor that bumps by one visit's duration on every use (shared across all cats, e.g. PetKit's "Total use"). Its history is the data source for every visit's duration, for all cats combined. |
-| `last_used_by` | required if >1 cat | entity id | — | The sensor reporting which cat used the box most recently (e.g. PetKit's "Last used by"). Only needed to disambiguate cats when there's more than one — with a single cat every visit is trivially theirs. |
+| `total_use` | yes, unless auto-detected via `device_id` | entity id | — | The sensor that bumps by one visit's duration on every use (shared across all cats, e.g. PetKit's "Total use"). Its history is the data source for every visit's duration, for all cats combined. |
+| `last_used_by` | required if >1 cat, unless auto-detected via `device_id` | entity id | — | The sensor reporting which cat used the box most recently (e.g. PetKit's "Last used by"). Only needed to disambiguate cats when there's more than one — with a single cat every visit is trivially theirs. |
 | `error` | no | entity id | — | Sensor reporting the device's current error/status code. |
 | `last_event` | no | entity id | — | Sensor reporting the device's most recent maintenance/cleaning event. |
 | `state` | no | entity id | — | Sensor reporting the device's current operating state (used by the `toggle_maintenance` control action). |

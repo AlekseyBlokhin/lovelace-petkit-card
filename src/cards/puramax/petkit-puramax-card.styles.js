@@ -34,6 +34,8 @@ export const CARD_STYLES = `
   .chip { display: flex; align-items: center; gap: var(--pk-space-xs); background: var(--secondary-background-color); border-radius: var(--pk-radius-lg); padding: var(--pk-space-xs) var(--pk-space-md); flex: 1 1 auto; min-width: 100px; }
   .chip.warn { background: rgba(var(--rgb-state-warning-color, 255,152,0), 0.15); }
   .chip.warn ha-icon { color: var(--warning-color); }
+  .chip.tappable { cursor: pointer; }
+  .chip.tappable:hover, .chip.tappable:focus-visible { background: var(--divider-color); outline: none; }
   .chip-label { font-size: 0.7em; color: var(--secondary-text-color); }
   .chip-value { font-size: 0.95em; color: var(--primary-text-color); font-weight: 500; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
