@@ -446,8 +446,13 @@ export class PetkitPuramaxCard extends HTMLElement {
       controlsRow.innerHTML = controls
         .map(
           (spec, i) => `
-        <button class="ctrl-btn" id="ctrl-${i}"><ha-icon icon="${spec.icon || 'mdi:help'}"></ha-icon><span>${spec.name || ''}</span></button>
-      `,
+      <ha-control-button class="ctrl-btn" id="ctrl-${i}" label="${escapeHtml(spec.name || '')}">
+        <div class="ctrl-btn-content">
+          <ha-icon icon="${escapeHtml(spec.icon || 'mdi:help')}"></ha-icon>
+          <span>${escapeHtml(spec.name || '')}</span>
+        </div>
+      </ha-control-button>
+    `,
         )
         .join('');
       controlsRow.dataset.bound = '1';

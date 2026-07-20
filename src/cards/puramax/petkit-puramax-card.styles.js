@@ -38,9 +38,29 @@ export const CARD_STYLES = `
   .chip-value { font-size: 0.95em; color: var(--primary-text-color); font-weight: 500; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
   .controls-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pk-space-sm); }
-  .ctrl-btn { display: flex; flex-direction: column; align-items: center; gap: var(--pk-space-2xs); background: var(--secondary-background-color); border: none; border-radius: var(--pk-radius-lg); padding: var(--pk-space-md) var(--pk-space-2xs); color: var(--primary-text-color); cursor: pointer; font-size: 0.75em; }
-  .ctrl-btn:hover { background: var(--divider-color); }
-  .ctrl-btn ha-icon { color: var(--state-icon-color, var(--primary-color)); }
+  ha-control-button.ctrl-btn {
+    width: 100%;
+    height: auto;
+    --control-button-padding: var(--pk-space-md) var(--pk-space-2xs);
+    --control-button-border-radius: var(--pk-radius-lg);
+    --control-button-background-color: var(--secondary-background-color);
+    --control-button-background-opacity: 1;
+    --control-button-icon-color: var(--state-icon-color, var(--primary-color));
+    --mdc-icon-size: 24px;
+  }
+  ha-control-button.ctrl-btn:hover {
+    --control-button-background-color: var(--divider-color);
+  }
+  .ctrl-btn-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--pk-space-2xs);
+    font-size: 0.75em;
+  }
+  .ctrl-btn-content span {
+    color: var(--primary-text-color);
+  }
   .chart-section { display: flex; flex-direction: column; gap: 0; }
   .chart-header { display: flex; align-items: center; justify-content: center; gap: var(--pk-space-2xl); margin-bottom: var(--pk-space-xs); }
   .nav-btn { background: none; border: none; color: var(--primary-text-color); font-size: 1em; cursor: pointer; padding: var(--pk-space-2xs) var(--pk-space-md); border-radius: var(--pk-radius-md); }
