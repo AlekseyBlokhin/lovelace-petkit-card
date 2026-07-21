@@ -205,13 +205,19 @@ Status chips, in order.
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `entity` | yes | entity id | — | Entity whose state is displayed. |
-| `name` | no | string | the entity's own friendly name | Chip label. Only ever an *override* — leave it unset to show the entity's own name, the same as any built-in card would. |
+| `name` | no | string | the entity's own registry display name | Chip label. Only ever an *override* — leave it unset to show the entity's own short name (the same one HA's device/entity pages show, e.g. "Wastebin" — not the combined device+entity `friendly_name`), the same as any built-in card would. |
 | `icon` | no | string (mdi icon) | the entity's own icon | Chip icon. Only ever an *override* — leave it unset to show a live `ha-state-icon` resolved from the entity (registry override, its own `icon` attribute, or HA's domain-icon table), not a fixed generic icon. |
-| `unit` | no | string | — | Appended to the raw state, e.g. `%`. |
-| `value_map` | no | object (`{state: label}`) | — | Maps a raw state to a display string (takes precedence over `unit`). YAML-only — no visual editor field. |
-| `warn_below` | no | number | — | Chip renders in a "warn" style if the numeric state is below this. |
-| `warn_above` | no | number | — | Chip renders in a "warn" style if the numeric state is above this. |
+| `warn_below` | no | number | — | Chip renders in a "warn" style if the numeric raw state is below this. |
+| `warn_above` | no | number | — | Chip renders in a "warn" style if the numeric raw state is above this. |
 | `warn_state` | no | string | — | Chip renders in a "warn" style if the raw state exactly equals this. |
+
+The chip's displayed value is always HA's own translated/formatted state
+(via `hass.formatEntityState` — the same text and units a built-in card or
+the more-info dialog would show, e.g. `2.20 kg` or a `device_class: problem`
+binary_sensor's `OK`/`Problem`) — there's no `unit`/`value_map` config to
+duplicate what HA already knows how to display. `warn_below`/`warn_above`/
+`warn_state` still compare against the entity's **raw** state, independent
+of how it's displayed.
 
 ### `controls_row[]`
 
@@ -225,7 +231,7 @@ this card's controls can too.
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `entity` | yes | entity id | — | The control's primary entity: the toggle target for a `toggle` tap_action, what lights up the button when its state is `on`, and the fallback for `more-info`. |
-| `name` | no | string | the entity's own friendly name | Button label. Override only, same as `info_row.name`. |
+| `name` | no | string | the entity's own registry display name | Button label. Override only, same as `info_row.name`. |
 | `icon` | no | string (mdi icon) | the entity's own icon | Button icon. Override only, same as `info_row.icon`. |
 | `tap_action` | no | [action config](https://www.home-assistant.io/dashboards/actions/) | `{action: more-info}` on `entity` | What a tap does — `perform-action` (call any service, e.g. `button.press`), `toggle`, `navigate`, `url`, `more-info`, `none`, each with an optional native `confirmation: {text: ...}` dialog. |
 | `hold_action` | no | action config | — | What a press-and-hold does. |
@@ -242,7 +248,7 @@ Card: pick an entity in the always-present picker at the bottom of the list
 to add a row (only `entity` is set — no name/icon/action baked in), drag to
 reorder, and click a row's Edit (pencil) button to open a full-page
 sub-editor for its other fields (Delete removes it directly from the list).
-`value_map`, `event_labels`, `event_exclude`, `unknown_cat_color`, and
+`event_labels`, `event_exclude`, `unknown_cat_color`, and
 `controls_row[].visibility` are YAML-only, since the visual editor doesn't
 yet have a clean widget for an arbitrary object/array there.
 

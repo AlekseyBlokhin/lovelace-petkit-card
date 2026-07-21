@@ -8,17 +8,29 @@ import { css } from 'lit';
 
 export const EDITOR_STYLES = css`
   .editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
-  /* No border-radius override here -- ha-form's own internal
-     "Content"/"Analytics & alerts" expandable groups render their own
-     ha-expansion-panel with HA's default corner radius; an override on
-     ONLY these editor-owned panels (Cats/Status chips/Controls) can't
-     reach inside ha-form's shadow DOM to match it, so it's left at the
-     native default everywhere for a consistent look across all five
-     sections. */
+  /* "Content" and "Analytics & alerts" are now hand-built
+     ha-expansion-panel siblings too (not ha-form's own internal
+     expandable), so this one rule shapes all five sections identically --
+     see the class header comment for why that's necessary. */
   ha-expansion-panel { --expansion-panel-summary-padding: 0 16px; }
   ha-expansion-panel h3[slot="header"] { margin: 0; font-size: 1em; font-weight: 500; }
   ha-svg-icon[slot="leading-icon"] { color: var(--secondary-text-color); }
   .panel-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 16px; }
+  /* Content's 4 show_* toggles: one small ha-form per field (see the class
+     header comment), laid out in a compact 2-column grid this stylesheet
+     controls directly -- ha-form's own grid sub-schema type hardcodes a
+     24px row-gap with no exposed override, which read as an oversized gap
+     between the two toggle rows. The --mdc-switch-* custom properties
+     shrink the native ha-switch itself; font-size shrinks its label --
+     both real, live properties MWC's switch/formfield already expose, not
+     a card_mod-style guess at internal markup. */
+  .content-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+  .content-toggles ha-form {
+    font-size: 0.85em;
+    --mdc-switch-track-height: 12px;
+    --mdc-switch-track-width: 28px;
+    --mdc-switch-thumb-height: 16px;
+  }
   .row { display: flex; align-items: center; gap: 4px; }
   .row ha-form { flex: 1 1 auto; min-width: 0; }
   .handle { display: flex; cursor: grab; color: var(--secondary-text-color); flex: 0 0 auto; touch-action: none; }

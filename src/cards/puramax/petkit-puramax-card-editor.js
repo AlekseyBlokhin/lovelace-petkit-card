@@ -35,16 +35,25 @@
  * nothing at runtime) -- `ha-svg-icon`/`ha-form`'s `iconPath` schema field
  * both need real SVG path data, not an `mdi:name` string.
  *
- * `ha-form`'s `expandable` schema type DOES nest the bound data object by
- * default -- both "Content" and "Analytics & alerts" below use
- * `flatten: true` since their fields (title/show_*, decline_threshold_pct/
- * etc.) are real top-level config keys, only visually grouped, not nested
- * under `cfg.content`/`cfg.alerts`. `device_id` sits outside "Content"
- * entirely, as its own top-level field -- picking the device is the first
- * decision a new card needs, not one more row inside a collapsed section.
- * The main form binds directly to `this._config`, so keys outside
- * MAIN_SCHEMA (cats/info_row/controls_row/device_entities/
- * unknown_cat_color) round-trip untouched via ha-form's own data merge.
+ * All five sections ("Content", "Analytics & alerts", "Cats", "Status
+ * chips", "Controls") are hand-built `ha-expansion-panel[outlined]`
+ * elements, direct siblings in this editor's own shadow root -- NOT
+ * `ha-form`'s built-in `type: 'expandable'` schema wrapper. That was tried
+ * first, but `ha-form`'s own internal `ha-form-expandable` hardcodes its
+ * OWN `--ha-card-border-radius` (8px) and its grid sub-type hardcodes a
+ * fixed 24px row-gap -- neither is reachable from outside (no exposed CSS
+ * part, no fallback-respecting `var()`, confirmed live), so two of five
+ * "sections" always looked like a different, denser component glued
+ * together with no gap, instead of five consistent cards. Building all five
+ * the same way (this editor's own flex `gap`, this editor's own
+ * `--ha-card-border-radius`) is what actually gets a consistent shape, not
+ * a CSS override fighting a component that doesn't expose one. Each
+ * section's `ha-form`(s) still bind straight to `this._config` (or, for
+ * "Content"'s toggle grid, one small `ha-form` per boolean field in a plain
+ * CSS grid `_content-toggles` controls the spacing/size of -- see
+ * `_renderContentSection()`), so keys outside any of these schemas
+ * (cats/info_row/controls_row/device_entities/unknown_cat_color) still
+ * round-trip untouched via each `ha-form`'s own data merge.
  *
  * info_row/controls_row follow the same pattern as HA's own Entities Card:
  * the list view shows a draggable icon+name summary per row (Edit/Delete
@@ -77,6 +86,7 @@
 
 import { LitElement, html, nothing } from 'lit';
 import { mdiTextShort, mdiPaw, mdiViewGridOutline, mdiGestureTapButton, mdiChartBar, mdiDragHorizontalVariant } from '@mdi/js';
+import { resolveEntityName } from '../../lib/ha-helpers.js';
 import { EDITOR_STYLES } from './petkit-puramax-card-editor.styles.js';
 
 const ICON_CONTENT = mdiTextShort;
@@ -108,19 +118,17 @@ const CAT_COLOR_SCHEMA = [{ name: 'color', label: 'Color', selector: { ui_color:
 // palette color like this resolves to real CSS at render time.
 const DEFAULT_NEW_CAT = { name: 'My Cat', color: 'blue' };
 
-// `value_map` (mapping a raw entity state to a display string) has no clean
-// ha-form widget for an arbitrary object-of-strings, so it stays YAML-only
-// for v1 (documented in the README) and is intentionally left out here.
-//
 // `name`/`icon` are both optional overrides -- left unset, the card
-// resolves them live from the entity itself (its own friendly name / icon,
-// the same defaults any built-in card would show), so a fresh row never
-// bakes the entity_id in as a fake "name".
+// resolves them live from the entity itself (its own registry display name /
+// icon, the same defaults any built-in card would show), so a fresh row
+// never bakes the entity_id in as a fake "name". No "(optional...)" suffix
+// on the label either -- overriding a default is the expected behavior of
+// any unset optional field, not something that needs spelling out (no other
+// HA card does this).
 const INFO_ROW_SCHEMA = [
   { name: 'entity', label: 'Entity', selector: { entity: {} } },
-  { name: 'name', label: "Name (optional — overrides the entity's own name)", selector: { text: {} } },
-  { name: 'icon', label: "Icon (optional — overrides the entity's own icon)", selector: { icon: {} } },
-  { name: 'unit', label: 'Unit', selector: { text: {} } },
+  { name: 'name', label: 'Name', selector: { text: {} } },
+  { name: 'icon', label: 'Icon', selector: { icon: {} } },
   { name: 'warn_below', label: 'Warn below', selector: { number: { mode: 'box' } } },
   { name: 'warn_above', label: 'Warn above', selector: { number: { mode: 'box' } } },
   { name: 'warn_state', label: 'Warn state', selector: { text: {} } },
@@ -140,69 +148,49 @@ const INFO_ROW_SCHEMA = [
 // other YAML-only field already relies on.
 const CONTROLS_ROW_SCHEMA = [
   { name: 'entity', label: 'Entity', selector: { entity: {} } },
-  { name: 'name', label: "Name (optional — overrides the entity's own name)", selector: { text: {} } },
-  { name: 'icon', label: "Icon (optional — overrides the entity's own icon)", selector: { icon: {} } },
+  { name: 'name', label: 'Name', selector: { text: {} } },
+  { name: 'icon', label: 'Icon', selector: { icon: {} } },
   { name: 'tap_action', label: 'Tap action', selector: { ui_action: {} } },
   { name: 'hold_action', label: 'Hold action', selector: { ui_action: {} } },
   { name: 'double_tap_action', label: 'Double-tap action', selector: { ui_action: {} } },
 ];
 
-const MAIN_SCHEMA = [
-  // Outside "Content" entirely, and first -- which PetKit device this card
-  // is for is the first decision a new card needs, not one more row inside
-  // a section you have to expand first.
-  { name: 'device_id', label: 'PetKit device', selector: { device: { filter: { integration: 'petkit' } } } },
+// Outside "Content" entirely, and first -- which PetKit device this card is
+// for is the first decision a new card needs, not one more row inside a
+// section you have to expand first.
+const DEVICE_SCHEMA = [{ name: 'device_id', label: 'PetKit device', selector: { device: { filter: { integration: 'petkit' } } } }];
+
+const CONTENT_TITLE_SCHEMA = [{ name: 'title', label: 'Title', selector: { text: {} } }];
+
+// Each rendered as its OWN small `ha-form` inside `_content-toggles` (a
+// plain CSS grid this stylesheet controls), not `ha-form`'s own `type:
+// 'grid'` sub-schema -- see the class header comment for why (that type's
+// 24px row-gap is hardcoded, unreachable from outside).
+const CONTENT_TOGGLE_SCHEMA = [
+  { name: 'show_state', label: 'Show state', selector: { boolean: {} } },
+  { name: 'show_history', label: 'Show history (visit chart)', selector: { boolean: {} } },
+  { name: 'show_working_records', label: 'Show Working Records', selector: { boolean: {} } },
+  { name: 'show_analytics', label: 'Show Analytics', selector: { boolean: {} } },
+];
+
+const ALERTS_SCHEMA = [
   {
-    name: 'content',
-    type: 'expandable',
-    // No real `cfg.content` object -- these are top-level config keys, only
-    // visually grouped here (same reasoning as `alerts` below).
-    flatten: true,
-    title: 'Content',
-    iconPath: ICON_CONTENT,
-    schema: [
-      { name: 'title', label: 'Title', selector: { text: {} } },
-      {
-        // A nameless `grid` group is pure layout (no data-nesting effect,
-        // same as the cats name/color grid used to be) -- lays the 4
-        // toggles out 2-per-row instead of each taking a full-width row,
-        // which was a lot of dead vertical space for a plain on/off value.
-        type: 'grid',
-        schema: [
-          { name: 'show_state', label: 'Show state', selector: { boolean: {} } },
-          { name: 'show_history', label: 'Show history (visit chart)', selector: { boolean: {} } },
-          { name: 'show_working_records', label: 'Show Working Records', selector: { boolean: {} } },
-          { name: 'show_analytics', label: 'Show Analytics', selector: { boolean: {} } },
-        ],
-      },
-    ],
+    name: 'decline_threshold_pct',
+    label: 'Decline/spike alert threshold (%)',
+    selector: { number: { min: 10, max: 100, mode: 'box' } },
   },
   {
-    name: 'alerts',
-    type: 'expandable',
-    flatten: true,
-    title: 'Analytics & alerts',
-    iconPath: ICON_ANALYTICS,
-    schema: [
-      {
-        name: 'decline_threshold_pct',
-        label: 'Decline/spike alert threshold (%)',
-        selector: { number: { min: 10, max: 100, mode: 'box' } },
-      },
-      {
-        name: 'no_visit_alert_hours',
-        label: 'Warn if no visit in (hours)',
-        selector: { number: { min: 1, max: 168, mode: 'box' } },
-      },
-      {
-        name: 'notify_service',
-        label: 'Push a notification too (optional)',
-        selector: { entity: { domain: 'notify' } },
-      },
-      // unknown_cat_color is deliberately NOT here -- YAML-only (same
-      // reasoning as value_map/event_labels/event_exclude/device_entities).
-    ],
+    name: 'no_visit_alert_hours',
+    label: 'Warn if no visit in (hours)',
+    selector: { number: { min: 1, max: 168, mode: 'box' } },
   },
+  {
+    name: 'notify_service',
+    label: 'Push a notification too (optional)',
+    selector: { entity: { domain: 'notify' } },
+  },
+  // unknown_cat_color is deliberately NOT here -- YAML-only (same reasoning
+  // as value_map/event_labels/event_exclude/device_entities).
 ];
 
 export class PetkitPuramaxCardEditor extends LitElement {
@@ -254,15 +242,16 @@ export class PetkitPuramaxCardEditor extends LitElement {
     );
   }
 
-  // Primary line: the configured name, else the entity's own live friendly
-  // name, else the bare entity id as a last resort. Secondary (muted) line:
-  // "Area → Device", the same context an entity picker's own selected-value
-  // chip shows -- so a row looks the same whether you're looking at the
-  // list view or its Edit sub-page's entity field.
+  // Primary line: the configured name, else the entity's own short registry
+  // display name (matching the card's own default -- see
+  // `resolveEntityName`), else the bare entity id as a last resort.
+  // Secondary (muted) line: "Area → Device", the same context an entity
+  // picker's own selected-value chip shows -- so a row looks the same
+  // whether you're looking at the list view or its Edit sub-page's entity
+  // field.
   _resolvedName(spec) {
     if (spec.name) return spec.name;
-    const stateObj = this._hass && this._hass.states ? this._hass.states[spec.entity] : null;
-    return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || spec.entity || '';
+    return resolveEntityName(this._hass, spec.entity) || spec.entity || '';
   }
 
   _entityContext(entityId) {
@@ -384,6 +373,9 @@ export class PetkitPuramaxCardEditor extends LitElement {
     return html`
       <div class="editor">
         <div id="main-section">${this._renderMainForm()}</div>
+
+        ${this._renderContentSection()}
+        ${this._renderAlertsSection()}
 
         <ha-expansion-panel outlined>
           <ha-svg-icon slot="leading-icon" .path=${ICON_CATS}></ha-svg-icon>
@@ -646,20 +638,80 @@ export class PetkitPuramaxCardEditor extends LitElement {
     };
   }
 
+  // Shared by every small per-section/per-field `ha-form` below -- each one
+  // binds straight to the full config (via `_mainFormData()`) and emits it
+  // back merged with just its own schema's change, same "keys outside this
+  // schema round-trip untouched" behavior as any other `ha-form` here.
+  _onMainFieldChanged(ev) {
+    ev.stopPropagation();
+    this._fireConfigChanged(ev.detail.value);
+  }
+
   _renderMainForm() {
     return html`
       <ha-form
         .hass=${this._hass}
-        .schema=${MAIN_SCHEMA}
+        .schema=${DEVICE_SCHEMA}
         .data=${this._mainFormData()}
         .computeLabel=${computeLabel}
-        @value-changed=${(ev) => {
-          ev.stopPropagation();
-          this._fireConfigChanged(ev.detail.value);
-        }}
+        @value-changed=${(ev) => this._onMainFieldChanged(ev)}
       ></ha-form>
     `;
   }
-}
 
-export { MAIN_SCHEMA };
+  // Hand-built `ha-expansion-panel[outlined]`, a sibling of Cats/Status
+  // chips/Controls below (not `ha-form`'s `type: 'expandable'`) -- see the
+  // class header comment for why. The 4 show_* toggles are laid out via
+  // `_content-toggles` (this stylesheet's own compact CSS grid), one small
+  // `ha-form` per toggle, rather than `ha-form`'s own `type: 'grid'`
+  // sub-schema, whose row-gap/field size aren't reachable from outside.
+  _renderContentSection() {
+    const data = this._mainFormData();
+    return html`
+      <ha-expansion-panel outlined id="content-panel">
+        <ha-svg-icon slot="leading-icon" .path=${ICON_CONTENT}></ha-svg-icon>
+        <h3 slot="header">Content</h3>
+        <div class="panel-body">
+          <ha-form
+            .hass=${this._hass}
+            .schema=${CONTENT_TITLE_SCHEMA}
+            .data=${data}
+            .computeLabel=${computeLabel}
+            @value-changed=${(ev) => this._onMainFieldChanged(ev)}
+          ></ha-form>
+          <div class="content-toggles">
+            ${CONTENT_TOGGLE_SCHEMA.map(
+              (field) => html`
+                <ha-form
+                  .hass=${this._hass}
+                  .schema=${[field]}
+                  .data=${data}
+                  .computeLabel=${computeLabel}
+                  @value-changed=${(ev) => this._onMainFieldChanged(ev)}
+                ></ha-form>
+              `,
+            )}
+          </div>
+        </div>
+      </ha-expansion-panel>
+    `;
+  }
+
+  _renderAlertsSection() {
+    return html`
+      <ha-expansion-panel outlined id="alerts-panel">
+        <ha-svg-icon slot="leading-icon" .path=${ICON_ANALYTICS}></ha-svg-icon>
+        <h3 slot="header">Analytics &amp; alerts</h3>
+        <div class="panel-body">
+          <ha-form
+            .hass=${this._hass}
+            .schema=${ALERTS_SCHEMA}
+            .data=${this._mainFormData()}
+            .computeLabel=${computeLabel}
+            @value-changed=${(ev) => this._onMainFieldChanged(ev)}
+          ></ha-form>
+        </div>
+      </ha-expansion-panel>
+    `;
+  }
+}

@@ -294,7 +294,7 @@ describe('PetkitPuramaxCard: rendering', () => {
   it('renders one chip per info_row entry when there is no device error', async () => {
     const cfg = baseConfig({
       info_row: [
-        { entity: 'sensor.consumable', name: 'Consumable', unit: '%' },
+        { entity: 'sensor.consumable', name: 'Consumable' },
         { entity: 'sensor.bin', name: 'Bin' },
       ],
     });
@@ -375,6 +375,62 @@ describe('PetkitPuramaxCard: rendering', () => {
     });
     await flush();
     expect(card.shadowRoot.querySelector('.chip-label').textContent).toBe('My Chip');
+  });
+
+  it('prefers the entity registry\'s short display name over the combined device+entity friendly_name', async () => {
+    // hass.entities mirrors HA's entity registry -- its `.name` is the same
+    // short, entity-relative name shown on a device's own page (e.g.
+    // "Wastebin"), unlike `friendly_name` (e.g. "PETKIT PURAMAX Wastebin"),
+    // which is redundant once the card's own title already names the device.
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable' }] });
+    card.setConfig(cfg);
+    const hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80', attributes: { friendly_name: 'PETKIT PURAMAX Consumable' } },
+    });
+    hass.entities = { 'sensor.consumable': { name: 'Consumable' } };
+    card.hass = hass;
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip-label').textContent).toBe('Consumable');
+  });
+
+  it('shows the entity\'s HA-translated state, not the raw state, when hass.formatEntityState is available', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'binary_sensor.wastebin', name: 'Waste Bin' }] });
+    card.setConfig(cfg);
+    const hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'binary_sensor.wastebin': { state: 'off', attributes: { device_class: 'problem' } },
+    });
+    hass.formatEntityState = vi.fn().mockReturnValue('OK');
+    card.hass = hass;
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip-value').textContent).toBe('OK');
+  });
+
+  it('falls back to the raw state for the chip value when hass has no formatEntityState (plain mock hass)', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'sensor.consumable', name: 'Consumable' }] });
+    card.setConfig(cfg);
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.consumable': { state: '80' },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.chip-value').textContent).toBe('80');
+  });
+
+  it('still warns off the entity\'s RAW state, independent of its translated display text', async () => {
+    const cfg = baseConfig({ info_row: [{ entity: 'binary_sensor.wastebin', name: 'Waste Bin', warn_state: 'on' }] });
+    card.setConfig(cfg);
+    const hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'binary_sensor.wastebin': { state: 'on', attributes: { device_class: 'problem' } },
+    });
+    hass.formatEntityState = vi.fn().mockReturnValue('Problem');
+    card.hass = hass;
+    await flush();
+    const chip = card.shadowRoot.querySelector('.chip');
+    expect(chip.classList.contains('warn')).toBe(true);
+    expect(chip.querySelector('.chip-value').textContent).toBe('Problem');
   });
 
   it('renders a live ha-state-icon (not a fixed generic icon) for a chip with no configured icon', async () => {
@@ -1192,6 +1248,117 @@ describe('PetkitPuramaxCard: no-visit alert', () => {
     expect(banner).not.toBeNull();
     expect(banner.textContent).toContain('no visits recorded yet');
     expect(hass.callService).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PetkitPuramaxCard: decline/spike (usage anomaly) alert', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A week of steady ~60s/day usage (6 past days, one visit each), so the
+  // 7-day average is well-established (daysOfHistory >= 3, avg7dTotal set)
+  // by the time "today" is evaluated.
+  function weekOfSteadyVisits(now, { todayDeltaSeconds = 0 } = {}) {
+    const points = [];
+    const { start } = dayBounds(-7, now);
+    points.push({ s: '0', lu: Math.floor(start.getTime() / 1000) });
+    let cumulative = 0;
+    for (let offset = -6; offset <= -1; offset++) {
+      const { start: dayStart } = dayBounds(offset, now);
+      cumulative += 60;
+      points.push({ s: String(cumulative), lu: Math.floor((dayStart.getTime() + 9 * 3600 * 1000) / 1000) });
+    }
+    if (todayDeltaSeconds > 0) {
+      const { start: todayStart } = dayBounds(0, now);
+      cumulative += todayDeltaSeconds;
+      points.push({ s: String(cumulative), lu: Math.floor((todayStart.getTime() + 9 * 3600 * 1000) / 1000) });
+    }
+    return points;
+  }
+
+  it('warns when today\'s usage is well below the 7-day average, after 18:00', async () => {
+    const now = new Date(2026, 6, 21, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': weekOfSteadyVisits(now) });
+    card.hass = hass;
+    await flush();
+
+    const banner = card.shadowRoot.querySelector('#decline-banner .warn-banner');
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('Cat A');
+    expect(banner.textContent).toContain('below');
+  });
+
+  it('warns when today\'s usage is well above the 7-day average, after 18:00', async () => {
+    const now = new Date(2026, 6, 21, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': weekOfSteadyVisits(now, { todayDeltaSeconds: 600 }) });
+    card.hass = hass;
+    await flush();
+
+    const banner = card.shadowRoot.querySelector('#decline-banner .warn-banner');
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('Cat A');
+    expect(banner.textContent).toContain('above');
+  });
+
+  it('shows no banner when today is within the normal band', async () => {
+    const now = new Date(2026, 6, 21, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': weekOfSteadyVisits(now, { todayDeltaSeconds: 60 }) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('#decline-banner .warn-banner')).toBeNull();
+  });
+
+  it('stays gated off before 18:00 local time even with a real decline', async () => {
+    const now = new Date(2026, 6, 21, 10, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': weekOfSteadyVisits(now) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('#decline-banner .warn-banner')).toBeNull();
+  });
+
+  it('honors a configured decline_threshold_pct', async () => {
+    const now = new Date(2026, 6, 21, 20, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    // 30s today vs a 60s/day average is 50% -- within the default 60%
+    // threshold's low band (would warn), but NOT below a much stricter 20%
+    // threshold (30/60 = 50% > 20%).
+    const card = makeCard();
+    card.setConfig(baseConfig({ decline_threshold_pct: 20 }));
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_total_use': weekOfSteadyVisits(now, { todayDeltaSeconds: 30 }) });
+    card.hass = hass;
+    await flush();
+
+    expect(card.shadowRoot.querySelector('#decline-banner .warn-banner')).toBeNull();
   });
 });
 

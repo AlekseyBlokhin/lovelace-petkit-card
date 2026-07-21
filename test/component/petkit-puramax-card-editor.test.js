@@ -42,6 +42,18 @@ function mainForm(editor) {
   return editor.shadowRoot.querySelector('#main-section ha-form');
 }
 
+function contentTitleForm(editor) {
+  return editor.shadowRoot.querySelector('#content-panel .panel-body > ha-form');
+}
+
+function contentToggleForms(editor) {
+  return editor.shadowRoot.querySelectorAll('#content-panel .content-toggles ha-form');
+}
+
+function alertsForm(editor) {
+  return editor.shadowRoot.querySelector('#alerts-panel ha-form');
+}
+
 // Name form is nested inside the cat's `.row` (alongside the drag handle
 // and Delete); the color form is the cat-item's other direct child ha-form,
 // deliberately outside `.row` so Delete never ends up between the two.
@@ -99,44 +111,56 @@ describe('PetkitPuramaxCardEditor: Content section', () => {
     editor.setConfig(baseConfig());
   });
 
-  it('puts device_id first, outside "Content" entirely', () => {
+  it('puts device_id in its own top-level form, outside "Content" entirely', () => {
     const schema = mainForm(editor).schema;
+    expect(schema).toHaveLength(1);
     expect(schema[0].name).toBe('device_id');
     expect(schema[0].label).toBe('PetKit device');
     expect(schema[0].selector).toEqual({ device: { filter: { integration: 'petkit' } } });
-    expect(schema[1].name).toBe('content');
   });
 
-  it('groups title/show_* under a "Content" group, right after device_id', () => {
-    const schema = mainForm(editor).schema;
-    const contentGroup = schema.find((s) => s.name === 'content');
-    expect(contentGroup.title).toBe('Content');
-    expect(contentGroup.flatten).toBe(true);
-    expect(contentGroup.schema.find((s) => s.name === 'title')).toBeDefined();
-    expect(contentGroup.schema.find((s) => s.name === 'device_id')).toBeUndefined();
+  it('"Content" and "Analytics & alerts" are hand-built ha-expansion-panels, not ha-form expandable groups', () => {
+    // Same shell every other section (Cats/Status chips/Controls) uses --
+    // this is what keeps all five sections' shape/spacing consistent,
+    // since ha-form's own `expandable` type hardcodes its own corner
+    // radius and grid row-gap with no exposed override (see the class
+    // header comment in the source).
+    expect(editor.shadowRoot.querySelector('#content-panel').tagName).toBe('HA-EXPANSION-PANEL');
+    expect(editor.shadowRoot.querySelector('#content-panel').hasAttribute('outlined')).toBe(true);
+    expect(editor.shadowRoot.querySelector('#alerts-panel').tagName).toBe('HA-EXPANSION-PANEL');
+    expect(editor.shadowRoot.querySelector('#alerts-panel').hasAttribute('outlined')).toBe(true);
   });
 
-  it('gives the Content group an mdi iconPath (native icon, not emoji)', () => {
-    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
-    expect(typeof contentGroup.iconPath).toBe('string');
-    expect(contentGroup.iconPath.length).toBeGreaterThan(0);
+  it('gives Content and Analytics & alerts each an mdi icon (native icon, not emoji)', () => {
+    const contentIcon = editor.shadowRoot.querySelector('#content-panel ha-svg-icon[slot="leading-icon"]');
+    const alertsIcon = editor.shadowRoot.querySelector('#alerts-panel ha-svg-icon[slot="leading-icon"]');
+    expect(typeof contentIcon.path).toBe('string');
+    expect(contentIcon.path.length).toBeGreaterThan(0);
+    expect(typeof alertsIcon.path).toBe('string');
+    expect(alertsIcon.path.length).toBeGreaterThan(0);
   });
 
-  it('groups the show_* toggles into their own grid (compact, not one full-width row each)', () => {
-    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
-    const grid = contentGroup.schema.find((s) => s.type === 'grid');
-    expect(grid).toBeDefined();
-    const names = grid.schema.map((s) => s.name);
-    expect(names).toEqual(['show_state', 'show_history', 'show_working_records', 'show_analytics']);
+  it('binds the Content title field to the full config', () => {
+    expect(contentTitleForm(editor).schema).toEqual([{ name: 'title', label: 'Title', selector: { text: {} } }]);
+    expect(contentTitleForm(editor).data.title).toBe('My Litter Box');
   });
 
-  it('exposes the show_* toggles as boolean selectors', () => {
-    const contentGroup = mainForm(editor).schema.find((s) => s.name === 'content');
-    const grid = contentGroup.schema.find((s) => s.type === 'grid');
-    for (const name of ['show_state', 'show_history', 'show_working_records', 'show_analytics']) {
-      const field = grid.schema.find((s) => s.name === name);
-      expect(field.selector).toEqual({ boolean: {} });
-    }
+  it('renders the 4 show_* toggles as one small ha-form each, in a compact grid container', () => {
+    // One ha-form per boolean field (not ha-form's own `type: grid`
+    // sub-schema, whose row-gap isn't overridable -- see source comment),
+    // laid out via the `.content-toggles` CSS grid this stylesheet owns.
+    const forms = contentToggleForms(editor);
+    expect(forms).toHaveLength(4);
+    expect([...forms].map((f) => f.schema[0].name)).toEqual([
+      'show_state',
+      'show_history',
+      'show_working_records',
+      'show_analytics',
+    ]);
+    [...forms].forEach((f) => expect(f.schema[0].selector).toEqual({ boolean: {} }));
+    const container = editor.shadowRoot.querySelector('#content-panel .content-toggles');
+    expect(container).not.toBeNull();
+    [...forms].forEach((f) => expect(container.contains(f)).toBe(true));
   });
 
   it('shows every show_* toggle as ON when the config omits them (the card\'s own default)', () => {
@@ -145,35 +169,34 @@ describe('PetkitPuramaxCardEditor: Content section', () => {
     // the section), the form must be handed an explicit `true` for display,
     // or every toggle would misleadingly look off on a config that's
     // actually showing everything.
-    const data = mainForm(editor).data;
-    expect(data.show_state).toBe(true);
-    expect(data.show_history).toBe(true);
-    expect(data.show_working_records).toBe(true);
-    expect(data.show_analytics).toBe(true);
+    const forms = contentToggleForms(editor);
+    [...forms].forEach((f) => expect(f.data[f.schema[0].name]).toBe(true));
   });
 
   it('reflects an explicit show_* = false without overriding it back to true', () => {
     const withHidden = makeEditor();
     withHidden.setConfig(baseConfig({ show_analytics: false }));
-    expect(mainForm(withHidden).data.show_analytics).toBe(false);
-    expect(mainForm(withHidden).data.show_state).toBe(true);
+    const forms = contentToggleForms(withHidden);
+    const analyticsForm = [...forms].find((f) => f.schema[0].name === 'show_analytics');
+    const stateForm = [...forms].find((f) => f.schema[0].name === 'show_state');
+    expect(analyticsForm.data.show_analytics).toBe(false);
+    expect(stateForm.data.show_state).toBe(true);
   });
 
-  it('does not expose a device_entities group in the visual editor (YAML/code-editor only)', () => {
-    const names = mainForm(editor).schema.map((s) => s.name);
-    expect(names).not.toContain('device_entities');
+  it('does not expose a device_entities field anywhere in the visual editor (YAML/code-editor only)', () => {
+    expect(mainForm(editor).schema.map((s) => s.name)).not.toContain('device_entities');
+    expect(contentTitleForm(editor).schema.map((s) => s.name)).not.toContain('device_entities');
+    expect(alertsForm(editor).schema.map((s) => s.name)).not.toContain('device_entities');
   });
 
-  it('marks the alerts group as flatten, with its own mdi iconPath', () => {
-    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
-    expect(alertsGroup.flatten).toBe(true);
-    expect(typeof alertsGroup.iconPath).toBe('string');
-    expect(alertsGroup.iconPath.length).toBeGreaterThan(0);
+  it('binds the alerts fields (decline threshold, no-visit hours, notify service) to the full config', () => {
+    const names = alertsForm(editor).schema.map((s) => s.name);
+    expect(names).toEqual(['decline_threshold_pct', 'no_visit_alert_hours', 'notify_service']);
+    expect(alertsForm(editor).data.decline_threshold_pct).toBe(55);
   });
 
   it('does not expose unknown_cat_color in the visual editor (YAML-only)', () => {
-    const alertsGroup = mainForm(editor).schema.find((s) => s.name === 'alerts');
-    expect(alertsGroup.schema.find((s) => s.name === 'unknown_cat_color')).toBeUndefined();
+    expect(alertsForm(editor).schema.find((s) => s.name === 'unknown_cat_color')).toBeUndefined();
   });
 });
 
@@ -410,7 +433,7 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
     expect(backButton(editor)).not.toBeNull();
     expect(editor.shadowRoot.querySelector('.detail-title').textContent).toBe('Edit status chip');
     const schema = detailForm(editor).schema;
-    expect(schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'unit', 'warn_below', 'warn_above', 'warn_state']);
+    expect(schema.map((s) => s.name)).toEqual(['entity', 'name', 'icon', 'warn_below', 'warn_above', 'warn_state']);
     expect(detailForm(editor).data).toEqual(baseConfig().info_row[0]);
   });
 
@@ -476,17 +499,18 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
     // disposes the old ha-expansion-panel elements and builds fresh ones,
     // unlike a plain value/structural edit that stays on the list view
     // (see the other describe block above, and the class header comment on
-    // `_openDetail`/`_closeDetail`).
+    // `_openDetail`/`_closeDetail`). Panel order: Content, Analytics &
+    // alerts, Cats, Status chips, Controls.
     const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    panels[1].expanded = true; // Status chips
-    panels[2].expanded = true; // Controls
+    panels[3].expanded = true; // Status chips
+    panels[4].expanded = true; // Controls
 
     click(infoRows(editor)[0].querySelector('.edit-btn'));
     click(backButton(editor));
 
     const after = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    expect(after[1].expanded).toBe(true);
-    expect(after[2].expanded).toBe(true);
+    expect(after[3].expanded).toBe(true);
+    expect(after[4].expanded).toBe(true);
   });
 
   it('a value-only setConfig round-trip while in the sub-page updates the form in place, not a rebuild', () => {
@@ -515,6 +539,7 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
   it("preserves each panel's expanded state across a value-only setConfig call", () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
+    // Panel order: Content, Analytics & alerts, Cats, Status chips, Controls.
     const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
     panels[0].expanded = true;
     panels[1].expanded = false;
@@ -557,15 +582,16 @@ describe('PetkitPuramaxCardEditor: setConfig value-only updates do not collapse 
   it('still preserves panel expanded state across a structural change (add cat)', () => {
     const editor = makeEditor();
     editor.setConfig(baseConfig());
+    // Panel order: Content, Analytics & alerts, Cats, Status chips, Controls.
     const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    panels[0].expanded = true; // the Cats panel
-    panels[1].expanded = true; // Status chips -- unrelated to the add-cat structural change
+    panels[2].expanded = true; // the Cats panel
+    panels[3].expanded = true; // Status chips -- unrelated to the add-cat structural change
 
     click(editor.shadowRoot.getElementById('add-cat'));
 
     const after = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    expect(after[0].expanded).toBe(true);
-    expect(after[1].expanded).toBe(true);
+    expect(after[2].expanded).toBe(true);
+    expect(after[3].expanded).toBe(true);
   });
 });
 

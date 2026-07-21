@@ -1,31 +1,31 @@
 /**
- * Pure computation for a single config-driven status chip: formats its
- * display value and decides whether it should render in a "warn" state.
- * Extracted from the original card's `_renderInfoChip`, which mixed this
- * logic with DOM string-building.
+ * Pure computation for a single config-driven status chip: decides its
+ * display text and whether it should render in a "warn" state. Extracted
+ * from the original card's `_renderInfoChip`, which mixed this logic with
+ * DOM string-building.
+ *
+ * Display text is the entity's own HA-translated state (formatted upstream
+ * via `hass.formatEntityState` -- see `resolveEntityName`/`formatState` in
+ * `ha-helpers.js`), not computed here -- HA already knows an entity's unit
+ * and how to phrase its state (e.g. a `device_class: problem` binary_sensor
+ * renders "OK"/"Problem"), so a config-level `unit`/`value_map` would only
+ * ever fight with or duplicate that. The warn check stays keyed off the
+ * entity's RAW state on purpose: warn thresholds compare real numbers/exact
+ * state strings, not display text a user could reword via translations.
  *
  * @param {object} spec - one entry of the `info_row` config array.
  * @param {string} [spec.entity]
  * @param {string} [spec.name]
  * @param {string} [spec.icon]
- * @param {string} [spec.unit]
- * @param {Record<string, string>} [spec.value_map]
  * @param {number} [spec.warn_below]
  * @param {number} [spec.warn_above]
  * @param {string} [spec.warn_state]
- * @param {string|null} rawValue - the entity's current state, or null if unavailable.
+ * @param {string|null} rawValue - the entity's current raw state, or null if unavailable.
+ * @param {string|null} [translatedValue] - the entity's HA-formatted display state.
  * @returns {{ display: string, warn: boolean }}
  */
-export function computeChipDisplay(spec, rawValue) {
-  let display = rawValue;
-
-  if (spec.value_map && rawValue in spec.value_map) {
-    display = spec.value_map[rawValue];
-  } else if (rawValue !== null && spec.unit) {
-    display = `${rawValue}${spec.unit}`;
-  }
-
-  if (display === null || display === undefined) display = '—';
+export function computeChipDisplay(spec, rawValue, translatedValue) {
+  const display = translatedValue === null || translatedValue === undefined || translatedValue === '' ? '—' : translatedValue;
 
   const num = parseFloat(rawValue);
   let warn = false;

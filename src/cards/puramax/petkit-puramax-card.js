@@ -4,9 +4,9 @@ import { formatDuration, formatHoursAgo } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
 import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
-import { bucketByDay, summarize, detectNoVisitAlert } from '../../lib/analytics.js';
+import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
-import { getState, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
+import { getState, formatState, resolveEntityName, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
 import { resolveDeviceEntities, resolveDefaultInfoRow, resolveDefaultControlsRow } from '../../lib/device-entities.js';
 import { resolveCssColor } from '../../lib/color.js';
 import { createTapHandlers } from '../../lib/actions.js';
@@ -492,23 +492,27 @@ export class PetkitPuramaxCard extends LitElement {
 
   // ---------- icon/name resolution ----------
   // Resolves the icon/name a chip or control shows when its config leaves
-  // `icon`/`name` unset: the entity's own current icon/friendly name, never
-  // baked into config -- `icon`/`name` in config only ever override. A real
-  // `ha-state-icon` (`.stateObj` bound directly, a live object reference --
-  // impossible to express as a plain HTML attribute, which is why the
-  // pre-Lit version needed a manual post-render DOM pass for this) resolves
-  // the entity's own icon the same way any built-in card would, instead of
-  // this card guessing a single generic fallback for every entity domain.
+  // `icon`/`name` unset: the entity's own current icon/registry display
+  // name, never baked into config -- `icon`/`name` in config only ever
+  // override. A real `ha-state-icon` (`.stateObj` bound directly, a live
+  // object reference -- impossible to express as a plain HTML attribute,
+  // which is why the pre-Lit version needed a manual post-render DOM pass
+  // for this) resolves the entity's own icon the same way any built-in card
+  // would, instead of this card guessing a single generic fallback for
+  // every entity domain.
   _iconTemplate(icon, entityId) {
     if (icon) return html`<ha-icon icon=${icon}></ha-icon>`;
     if (entityId) return html`<ha-state-icon .stateObj=${this._hass?.states?.[entityId]}></ha-state-icon>`;
     return html`<ha-icon icon="mdi:information-outline"></ha-icon>`;
   }
 
+  // `resolveEntityName` returns the same short, entity-relative name HA's
+  // own device/entity pages show (e.g. "Wastebin"), not the combined
+  // device+entity `friendly_name` ("PETKIT PURAMAX Wastebin") -- redundant
+  // here since the card's own title already names the device once.
   _entityLabel(name, entityId) {
     if (name) return name;
-    const stateObj = this._hass && this._hass.states ? this._hass.states[entityId] : null;
-    return (stateObj && stateObj.attributes && stateObj.attributes.friendly_name) || entityId || '';
+    return resolveEntityName(this._hass, entityId);
   }
 
   // One gesture-tracking slot (hold-timestamp/double-tap-timestamp state,
@@ -598,7 +602,8 @@ export class PetkitPuramaxCard extends LitElement {
 
   _renderInfoChip(spec) {
     const rawValue = this._s(spec.entity, null);
-    const { display, warn } = computeChipDisplay(spec, rawValue);
+    const translatedValue = formatState(this._hass, spec.entity, null);
+    const { display, warn } = computeChipDisplay(spec, rawValue, translatedValue);
     return this._chipTemplate(spec.icon, this._entityLabel(spec.name, spec.entity), display, warn, spec.entity);
   }
 
@@ -874,16 +879,22 @@ export class PetkitPuramaxCard extends LitElement {
   _renderAnalyticsSection() {
     if (!this._analytics) return nothing;
     const cfg = this._config;
-    const threshold = (cfg.decline_threshold_pct || DEFAULT_DECLINE_THRESHOLD_PCT) / 100;
+    const thresholdPct = cfg.decline_threshold_pct || DEFAULT_DECLINE_THRESHOLD_PCT;
+    const hourOfDay = new Date().getHours();
     const warnings = [];
     const catTables = cfg.cats.map((cat) => {
       const a = this._analytics[cat.name] || {};
-      if (a.daysOfHistory >= 3 && a.avg7dTotal && new Date().getHours() >= 18) {
-        if (a.todayTotal < threshold * a.avg7dTotal) {
-          warnings.push(`${cat.name}'s usage today is well below their recent average — worth a check.`);
-        } else if (a.todayTotal > (2 - threshold) * a.avg7dTotal) {
-          warnings.push(`${cat.name}'s usage today is well above their recent average — worth a check.`);
-        }
+      const anomaly = detectAnomaly({
+        todayTotal: a.todayTotal,
+        avg7dTotal: a.avg7dTotal,
+        daysOfHistory: a.daysOfHistory,
+        thresholdPct,
+        hourOfDay,
+      });
+      if (anomaly === 'low') {
+        warnings.push(`${cat.name}'s usage today is well below their recent average — worth a check.`);
+      } else if (anomaly === 'high') {
+        warnings.push(`${cat.name}'s usage today is well above their recent average — worth a check.`);
       }
       return html`
         <div class="cat-analytics">
