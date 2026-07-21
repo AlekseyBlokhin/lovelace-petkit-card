@@ -80,7 +80,7 @@
  * `toggle_maintenance` action: two ordinary buttons, each visible only in
  * one state, read by the user as a single control that changes what it
  * shows. `visibility` itself is YAML-only for now (same reasoning as
- * `value_map`/`event_labels`/`unknown_cat_color`: no clean `ha-form` widget
+ * `value_map`/`unknown_cat_color`: no clean `ha-form` widget
  * for an arbitrary nested condition array yet).
  */
 
@@ -190,7 +190,7 @@ const ALERTS_SCHEMA = [
     selector: { entity: { domain: 'notify' } },
   },
   // unknown_cat_color is deliberately NOT here -- YAML-only (same reasoning
-  // as value_map/event_labels/event_exclude/device_entities).
+  // as value_map/event_exclude/device_entities).
 ];
 
 export class PetkitPuramaxCardEditor extends LitElement {

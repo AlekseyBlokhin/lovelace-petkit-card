@@ -4,9 +4,9 @@ Thanks for considering a contribution to `lovelace-petkit-card`.
 
 ## Requesting support for a new PETKIT device
 
-I only own a **PETKIT PURAMAX**, so the card's config schema,
-device-status vocabulary (`event_labels`), and status/control defaults are
-all written against that device's entities. Supporting a different PETKIT
+I only own a **PETKIT PURAMAX**, so the card's config schema and
+status/control defaults are all written against that device's entities.
+Supporting a different PETKIT
 device (a different litter box model, a feeder, a fountain, etc.) requires
 community-contributed data — I have no way to know what entities/attributes
 another device exposes, or how its firmware reports state, without someone

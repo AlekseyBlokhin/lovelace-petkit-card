@@ -46,6 +46,34 @@ export function formatState(hass, entityId, fallback) {
 }
 
 /**
+ * Formats a PAST state value for an entity (e.g. one point from a
+ * `history_during_period` query) the same way the real Home Assistant
+ * frontend would show it, via `hass.formatEntityState(stateObj, state)` --
+ * the same documented custom-card API `formatState` uses above, but with
+ * its optional second argument: this is how the real frontend itself
+ * formats a historical value that differs from the entity's current live
+ * state (e.g. in history graphs/logbook), letting an integration's own
+ * `strings.json` enum translations (e.g. a PETKIT firmware event code ->
+ * "Manual odor removal failed. Please make sure the Odor Removal Device
+ * has sufficient battery") apply to old points too, not just the live
+ * state. Falls back to the raw `value` unchanged when `hass` doesn't
+ * expose `formatEntityState` or the entity isn't in `hass.states` (e.g. a
+ * plain mock `hass` in a test), so this degrades gracefully rather than
+ * throwing.
+ *
+ * @param {any} hass
+ * @param {string} entityId
+ * @param {string} value
+ * @returns {string}
+ */
+export function formatHistoricalState(hass, entityId, value) {
+  if (value == null) return value;
+  const stateObj = entityId && hass && hass.states ? hass.states[entityId] : null;
+  if (!stateObj || typeof hass.formatEntityState !== 'function') return value;
+  return hass.formatEntityState(stateObj, value);
+}
+
+/**
  * Resolves the short, entity-relative display name Home Assistant itself
  * shows for an entity (e.g. "Wastebin" on a device's own page), rather than
  * `attributes.friendly_name` (e.g. "PETKIT PURAMAX Wastebin", the

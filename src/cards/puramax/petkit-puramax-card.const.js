@@ -1,25 +1,4 @@
 /**
- * Optional display-relabeling for `device_entities.last_event` state
- * values, as reported by PETKIT PURAMAX firmware. Purely cosmetic renaming
- * of a KNOWN exact raw value to nicer text (`auto_cleaning_completed` ->
- * "Auto cleaning done") -- never used to hide, exclude, or otherwise decide
- * WHETHER a row is shown (see `DEFAULT_EVENT_EXCLUDE` for that). An
- * optional `event_labels` config object is shallow-merged over this map
- * (config wins); any raw value with no entry here (including every visit
- * narration, e.g. "Whiskers used the litter box") is shown completely
- * verbatim, exactly as PETKIT reported it -- Working Records never runs raw
- * state text through any pattern/regex to detect, reinterpret, or reformat
- * it.
- *
- * @type {Record<string, string>}
- */
-export const DEFAULT_EVENT_LABELS = {
-  maintenance_mode: 'Maintenance mode',
-  manual_odor_completed: 'Manual odor removal done',
-  auto_cleaning_completed: 'Auto cleaning done',
-};
-
-/**
  * Default `event_exclude` list: raw `last_event` state values hidden from
  * Working Records entirely, matched case-insensitively against the exact
  * raw state value (a plain equality check, never a substring/pattern match

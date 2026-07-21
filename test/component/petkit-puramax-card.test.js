@@ -896,7 +896,7 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     expect(rows.length).toBe(1);
-    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+    expect(rows[0].querySelector('.record-text').textContent).toBe('maintenance_mode');
   });
 
   it('a user can replace the exclude list via event_exclude config to hide a different/additional raw state', async () => {
@@ -916,7 +916,7 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     expect(rows.length).toBe(1);
-    expect(rows[0].querySelector('.record-text').textContent).toBe('Maintenance mode');
+    expect(rows[0].querySelector('.record-text').textContent).toBe('maintenance_mode');
   });
 
   it('event_exclude matches case-insensitively against the exact raw state, never a substring/pattern', async () => {
@@ -1105,7 +1105,15 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
     expect(texts.filter((t) => t === 'Cat A used the litter box').length).toBe(2);
   });
 
-  it('event_labels relabels a known status state but never touches a visit narration', async () => {
+  it('renders last_event history through hass.formatEntityState (HA\'s own translation), not a hand-rolled label map', async () => {
+    // REGRESSION: a hand-maintained event->label map (`DEFAULT_EVENT_LABELS`)
+    // used to relabel a *known subset* of raw firmware codes and show every
+    // other one (e.g. `manual_odor_failed_batt`) completely raw. Home
+    // Assistant already translates every PETKIT `last_event` enum value via
+    // the integration's own `strings.json` -- Working Records now defers to
+    // that (`hass.formatEntityState(stateObj, value)`, the same documented
+    // custom-card API used for the info-row chips) instead of duplicating
+    // and inevitably falling behind that vocabulary.
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -1113,9 +1121,38 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
     today9am.setHours(9, 0, 0, 0);
     const t0 = Math.floor(today9am.getTime() / 1000);
     const lastEventHistory = [
-      { s: 'auto_cleaning_completed', lu: t0 },
+      { s: 'manual_odor_failed_batt', lu: t0 },
       { s: 'Cat A used the litter box', lu: t0 + 60 },
     ];
+    const lastEventStateObj = { state: 'Cat A used the litter box', attributes: {} };
+    const hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.test_petkit_last_event': lastEventStateObj,
+    });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    hass.formatEntityState = vi.fn((stateObj, value) =>
+      value === 'manual_odor_failed_batt'
+        ? 'Manual odor removal failed. Please make sure the Odor Removal Device has sufficient battery.'
+        : value,
+    );
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts).toContain('Manual odor removal failed. Please make sure the Odor Removal Device has sufficient battery.');
+    expect(texts).toContain('Cat A used the litter box');
+    expect(hass.formatEntityState).toHaveBeenCalledWith(lastEventStateObj, 'manual_odor_failed_batt');
+  });
+
+  it('shows the raw last_event value verbatim when hass has no formatEntityState (plain mock hass)', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
+    const lastEventHistory = [{ s: 'auto_cleaning_completed', lu: t0 }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
     card.hass = hass;
@@ -1123,8 +1160,7 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
 
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
-    expect(texts).toContain('Auto cleaning done');
-    expect(texts).toContain('Cat A used the litter box');
+    expect(texts).toContain('auto_cleaning_completed');
   });
 });
 

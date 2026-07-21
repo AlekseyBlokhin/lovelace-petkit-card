@@ -40,6 +40,24 @@ const ENTITY_IDS = {
   error: 'sensor.golden_error',
 };
 
+// Real HA-frontend-facing translations for the `last_event` firmware codes
+// that appear in the fixtures below, taken verbatim from the PETKIT
+// integration's own strings.json (RobertD502/home-assistant-petkit,
+// `custom_components/petkit/strings.json`, `sensor.max_last_event.state`).
+// Working Records now defers to `hass.formatEntityState` for this
+// translation instead of a hand-maintained map (see `ha-helpers.js`'s
+// `formatHistoricalState`) -- mocking the real strings here (rather than
+// stubbing arbitrary text) keeps this golden test honest about what a real
+// HA frontend actually renders for these codes.
+const LAST_EVENT_TRANSLATIONS = {
+  auto_cleaning_completed: 'Auto cleaning completed',
+  maintenance_mode: 'Maintenance mode',
+  manual_cleaning_canceled: 'Manual cleaning canceled, device in operation',
+  manual_cleaning_completed: 'Manual cleaning completed',
+  manual_odor_completed: 'Manual odor removal completed',
+  manual_odor_failed_batt: 'Manual odor removal failed. Please make sure the Odor Removal Device has sufficient battery.',
+};
+
 function goldenConfig() {
   return {
     type: 'custom:petkit-puramax-card',
@@ -59,7 +77,14 @@ async function flush() {
 
 function makeGoldenHass(fixture) {
   return {
-    states: { [ENTITY_IDS.error]: { state: 'no_error' } },
+    states: {
+      [ENTITY_IDS.error]: { state: 'no_error' },
+      // A stub current stateObj for `last_event` -- only its presence in
+      // `hass.states` matters (see `formatHistoricalState`), not its own
+      // `state`, since every rendered row's text comes from formatting the
+      // historical `value` argument below, not this object's own state.
+      [ENTITY_IDS.last_event]: { state: 'unknown', attributes: {} },
+    },
     // The mock ignores the requested start/end window entirely and always
     // returns the full fixture for whichever entity was asked about --
     // both _loadDay's "today" request and _loadAnalytics's "last 7 days"
@@ -76,6 +101,7 @@ function makeGoldenHass(fixture) {
       return Promise.resolve(result);
     }),
     callService: vi.fn(),
+    formatEntityState: vi.fn((stateObj, value) => LAST_EVENT_TRANSLATIONS[value] ?? value),
   };
 }
 

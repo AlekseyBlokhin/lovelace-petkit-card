@@ -157,7 +157,6 @@ or a full example at
 | `show_analytics` | no | boolean | `true` | Shows the [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work) section, including the decline/spike and "no visit" banners. |
 | `device_id` | one of `device_id`/`device_entities.total_use` required | device id | — | Your PetKit device (native device picker in the visual editor). Auto-detects `device_entities.{total_use,last_used_by,error,last_event,state}` from the device's entity registry, by matching each sensor's stable `translation_key` — works regardless of what you've renamed the `entity_id`/friendly name to. Any key also set explicitly in `device_entities` overrides the auto-detected one. If a required sensor (`total_use`, or `last_used_by` when there's more than one cat) can't be auto-detected and isn't overridden, the card shows an in-card error naming the missing sensor. |
 | `device_entities` | one of `device_id`/`device_entities.total_use` required | object | — | See [`device_entities`](#device_entities) below. Optional (and acts only as an override on top of `device_id`'s auto-detection) once `device_id` is set. |
-| `event_labels` | no | object (`{state: label}`) | `{}` | Merged over the built-in PURAMAX event-label map (config wins). Purely cosmetic renaming of a known raw `last_event` value to nicer text (e.g. `auto_cleaning_completed` → "Auto cleaning done") — never decides whether a row is shown, only how it's captioned. Any raw value with no entry here (including every visit narration) is shown completely verbatim. YAML-only — no visual editor field. |
 | `event_exclude` | no | array of strings | `["unavailable", "unknown", "no_events_yet"]` | Raw `last_event` state values hidden from [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) entirely, matched case-insensitively against the exact raw state (never a substring/pattern — a real "Unknown used the litter box" visit is never affected, since its raw text isn't the bare word "unknown"). Replaces the default list rather than merging with it. YAML-only — no visual editor field. |
 | `unknown_cat_color` | no | string (CSS color) | `#9e9e9e` | Chart/Usage-line color for a visit the device itself couldn't identify a cat for ([`device_entities.last_used_by`](#device_entities) reporting PURAMAX's `unknown_pet` placeholder). Unrelated to [Working Records](./docs/ARCHITECTURE.md#how-working-records-works), which never inspects visit identity. YAML-only — no visual editor field. |
 | `cats` | yes | array, min 1 | — | One entry per cat. See [`cats[]`](#cats) below. |
@@ -248,9 +247,9 @@ Card: pick an entity in the always-present picker at the bottom of the list
 to add a row (only `entity` is set — no name/icon/action baked in), drag to
 reorder, and click a row's Edit (pencil) button to open a full-page
 sub-editor for its other fields (Delete removes it directly from the list).
-`event_labels`, `event_exclude`, `unknown_cat_color`, and
-`controls_row[].visibility` are YAML-only, since the visual editor doesn't
-yet have a clean widget for an arbitrary object/array there.
+`event_exclude`, `unknown_cat_color`, and `controls_row[].visibility` are
+YAML-only, since the visual editor doesn't yet have a clean widget for an
+arbitrary object/array there.
 
 For the algorithm details behind the per-cat chart and Analytics — how
 visit duration/identity is reconstructed from raw sensor history — see

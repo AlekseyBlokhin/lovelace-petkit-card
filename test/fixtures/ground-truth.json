@@ -98,11 +98,11 @@
       },
       {
         "ts": 1784064074.135547,
-        "text": "manual_cleaning_completed"
+        "text": "Manual cleaning completed"
       },
       {
         "ts": 1784063864.143932,
-        "text": "manual_cleaning_canceled"
+        "text": "Manual cleaning canceled, device in operation"
       },
       {
         "ts": 1784061522.270801,
@@ -118,11 +118,11 @@
       },
       {
         "ts": 1784050278.217472,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784023000.206403,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784021006.311188,
@@ -134,7 +134,7 @@
       },
       {
         "ts": 1784019591.191505,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784019513.268443,
@@ -146,7 +146,7 @@
       },
       {
         "ts": 1784019290.086281,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784019222.278704,
@@ -158,23 +158,23 @@
       },
       {
         "ts": 1784015378.349192,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784011530.343577,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784010870.313114,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784006318.25684,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784005386.283838,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784003161.21725,
@@ -182,7 +182,7 @@
       },
       {
         "ts": 1784003108.18053,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784003020.296502,
@@ -206,7 +206,7 @@
       },
       {
         "ts": 1783999646.170582,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1783999635.944061,
@@ -348,7 +348,7 @@
       },
       {
         "ts": 1784137839.407336,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784137131.274394,
@@ -368,7 +368,7 @@
       },
       {
         "ts": 1784110328.251729,
-        "text": "manual_odor_failed_batt"
+        "text": "Manual odor removal failed. Please make sure the Odor Removal Device has sufficient battery."
       },
       {
         "ts": 1784110286.252877,
@@ -380,7 +380,7 @@
       },
       {
         "ts": 1784105998.84365,
-        "text": "manual_odor_failed_batt"
+        "text": "Manual odor removal failed. Please make sure the Odor Removal Device has sufficient battery."
       },
       {
         "ts": 1784102085.230374,
@@ -392,7 +392,7 @@
       },
       {
         "ts": 1784091797.247159,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784086404.23723,
@@ -416,7 +416,7 @@
       },
       {
         "ts": 1784079698.743902,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784079631.245028,
@@ -432,7 +432,7 @@
       },
       {
         "ts": 1784069748.826679,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784069681.204505,
@@ -440,15 +440,15 @@
       },
       {
         "ts": 1784069350.29916,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784068389.238385,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784066759.21277,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784066400.0,
@@ -591,7 +591,7 @@
       },
       {
         "ts": 1784219637.892375,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784219570.252967,
@@ -615,7 +615,7 @@
       },
       {
         "ts": 1784201292.059792,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784198545.225998,
@@ -627,7 +627,7 @@
       },
       {
         "ts": 1784197090.757306,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784197023.186171,
@@ -639,7 +639,7 @@
       },
       {
         "ts": 1784193805.858666,
-        "text": "Manual odor removal done"
+        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784190760.257473,
@@ -651,15 +651,15 @@
       },
       {
         "ts": 1784189349.222284,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784182411.240085,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784178192.228584,
-        "text": "Auto cleaning done"
+        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784175562.391917,

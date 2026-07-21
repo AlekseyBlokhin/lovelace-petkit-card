@@ -44,12 +44,18 @@ per-named-cat views).
 
 ## How Working Records works
 
-Working Records is `device_entities.last_event`'s own history, shown
-**verbatim** — the exact text PETKIT reported, in arrival order. The only
-filtering is `event_exclude` (an explicit, configurable list of raw values
-to hide entirely) and `event_labels` (a purely cosmetic exact-match
-rename). There is no pattern-matching against the text to detect "is this a
-visit," no synthesized re-phrasing, and no cross-reference back to the
+Working Records is `device_entities.last_event`'s own history, shown as
+Home Assistant itself would display each value — each raw point is run
+through `hass.formatEntityState(stateObj, value)`, the same documented
+custom-card API the real frontend uses to format a historical value against
+an entity's current translation (so a PETKIT firmware event code like
+`manual_odor_failed_batt` renders using the integration's own `strings.json`
+translation, not a hand-maintained relabeling map — a raw value the
+integration doesn't translate is shown exactly as PETKIT reported it,
+untouched). The only filtering is `event_exclude` (an explicit, configurable
+list of raw values to hide entirely). There is no pattern-matching against
+the text to detect "is this a visit," no synthesized re-phrasing, and no
+cross-reference back to the
 `total_use`/`last_used_by` reconstruction above — merging two
 independently-computed views of "what happened" and reconciling them with
 dedupe logic is exactly what caused a string of real bugs in earlier

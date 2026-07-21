@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { formatState, resolveEntityName } from '../../src/lib/ha-helpers.js';
+import { formatState, formatHistoricalState, resolveEntityName } from '../../src/lib/ha-helpers.js';
 
 describe('formatState', () => {
   it('returns fallback when the entity is missing', () => {
@@ -19,6 +19,31 @@ describe('formatState', () => {
   it('falls back to the raw state when hass has no formatEntityState (e.g. a plain test mock)', () => {
     const hass = { states: { 'sensor.total': { state: '2.2' } } };
     expect(formatState(hass, 'sensor.total', null)).toBe('2.2');
+  });
+});
+
+describe('formatHistoricalState', () => {
+  it('returns the value unchanged when it is nullish', () => {
+    expect(formatHistoricalState({ states: {} }, 'sensor.x', null)).toBe(null);
+  });
+
+  it('returns the raw value when the entity is missing from hass.states', () => {
+    expect(formatHistoricalState({ states: {} }, 'sensor.missing', 'raw_code')).toBe('raw_code');
+  });
+
+  it('formats a past value against the entity\'s current stateObj via hass.formatEntityState', () => {
+    const stateObj = { state: 'current text', attributes: {} };
+    const hass = {
+      states: { 'sensor.last_event': stateObj },
+      formatEntityState: vi.fn().mockReturnValue('Translated text'),
+    };
+    expect(formatHistoricalState(hass, 'sensor.last_event', 'raw_code')).toBe('Translated text');
+    expect(hass.formatEntityState).toHaveBeenCalledWith(stateObj, 'raw_code');
+  });
+
+  it('falls back to the raw value when hass has no formatEntityState (e.g. a plain test mock)', () => {
+    const hass = { states: { 'sensor.last_event': { state: 'x' } } };
+    expect(formatHistoricalState(hass, 'sensor.last_event', 'raw_code')).toBe('raw_code');
   });
 });
 

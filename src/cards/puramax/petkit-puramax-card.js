@@ -6,7 +6,7 @@ import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNO
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
-import { getState, formatState, resolveEntityName, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
+import { getState, formatState, formatHistoricalState, resolveEntityName, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
 import { resolveDeviceEntities, resolveDefaultInfoRow, resolveDefaultControlsRow } from '../../lib/device-entities.js';
 import { resolveCssColor } from '../../lib/color.js';
 import { createTapHandlers } from '../../lib/actions.js';
@@ -14,7 +14,6 @@ import { checkConditionsMet } from '../../lib/visibility.js';
 import { CARD_STYLES } from './petkit-puramax-card.styles.js';
 import {
   DEFAULT_TITLE,
-  DEFAULT_EVENT_LABELS,
   DEFAULT_EVENT_EXCLUDE,
   DEFAULT_UNKNOWN_CAT_COLOR,
   DEFAULT_DECLINE_THRESHOLD_PCT,
@@ -38,7 +37,8 @@ import {
  *    `_fetchVisits()` for how a duration+identity per visit is derived from
  *    those two generic sensors.
  *  - Working Records is `device_entities.last_event`'s own history, shown
- *    verbatim — see `_renderRecordsSection()` for why it's deliberately NOT
+ *    as Home Assistant itself would display each value — see
+ *    `_renderRecordsSection()` for why it's deliberately NOT
  *    cross-referenced with the reconstruction above.
  *
  * A `LitElement`: `render()` declares the whole card from current state on
@@ -822,36 +822,36 @@ export class PetkitPuramaxCard extends LitElement {
     `;
   }
 
-  // Merges any config-provided `event_labels` over the PURAMAX firmware
-  // defaults (config wins), so a different device/firmware vocabulary can
-  // be supported purely via config, with no card changes.
-  _eventLabels() {
-    return { ...DEFAULT_EVENT_LABELS, ...(this._config.event_labels || {}) };
-  }
-
   // Working Records has exactly ONE source of truth, and it's `last_event`
-  // -- rendered VERBATIM, never a computed re-phrasing and never
-  // interpreted through a pattern/regex. Every row PETKIT reports is shown,
-  // in the exact words it used, in arrival order; the only filtering is an
-  // explicit, configurable list of raw values to hide entirely
-  // (`event_exclude`) -- no guessing at "is this a duplicate" or "is this a
-  // visit." There is also deliberately no cross-reference back to the
-  // total_use/last_used_by reconstruction that drives the chart/usage/
-  // analytics: merging two independently-computed views of "what happened"
-  // and reconciling them with dedupe logic is exactly what caused a string
-  // of real bugs before (see git history / issues #13, #14, #16) -- a
-  // single, unmodified stream has no reconciliation to get wrong.
+  // -- rendered as Home Assistant itself would show that value (via
+  // `hass.formatEntityState`, which reads the PETKIT integration's own
+  // `strings.json` enum translations), never a hand-maintained relabeling
+  // map and never interpreted through a pattern/regex. Every row PETKIT
+  // reports is shown, in arrival order; the only filtering is an explicit,
+  // configurable list of raw values to hide entirely (`event_exclude`) --
+  // no guessing at "is this a duplicate" or "is this a visit." There is
+  // also deliberately no cross-reference back to the total_use/
+  // last_used_by reconstruction that drives the chart/usage/analytics:
+  // merging two independently-computed views of "what happened" and
+  // reconciling them with dedupe logic is exactly what caused a string of
+  // real bugs before (see git history / issues #13, #14, #16) -- a single,
+  // unmodified stream has no reconciliation to get wrong.
   _renderRecordsSection() {
     const cfg = this._config;
     const eventHist = this._chartEventHist || [];
-    const eventLabels = this._eventLabels();
+    const lastEventEntity = this._deviceEntities.last_event;
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
     const records = eventHist
       .map((point) => {
         const val = point.s ?? point.state;
         const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
         if (!val || !ts || excludeList.includes(val.toLowerCase())) return null;
-        return { ts, icon: 'mdi:information-outline', color: 'var(--secondary-text-color)', text: eventLabels[val] || val };
+        return {
+          ts,
+          icon: 'mdi:information-outline',
+          color: 'var(--secondary-text-color)',
+          text: formatHistoricalState(this._hass, lastEventEntity, val),
+        };
       })
       .filter(Boolean);
     records.sort((a, b) => b.ts - a.ts);
