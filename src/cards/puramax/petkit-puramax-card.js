@@ -2,12 +2,25 @@ import { LitElement, html, svg, nothing } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import { formatDuration, formatHoursAgo } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
+import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, rawStateAndTs, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
-import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert } from '../../lib/analytics.js';
+import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert, perCatMap } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
-import { getState, formatState, formatHistoricalState, resolveEntityName, fireMoreInfo, callService } from '../../lib/ha-helpers.js';
-import { resolveDeviceEntities, resolveDefaultInfoRow, resolveDefaultControlsRow } from '../../lib/device-entities.js';
+import {
+  getState,
+  formatState,
+  formatHistoricalState,
+  resolveEntityName,
+  fireMoreInfo,
+  callService,
+  flushLitUpdate,
+} from '../../lib/ha-helpers.js';
+import {
+  resolveDeviceEntities,
+  resolveDefaultInfoRow,
+  resolveDefaultControlsRow,
+  requiredDeviceEntityField,
+} from '../../lib/device-entities.js';
 import { resolveCssColor } from '../../lib/color.js';
 import { createTapHandlers } from '../../lib/actions.js';
 import { checkConditionsMet } from '../../lib/visibility.js';
@@ -133,7 +146,13 @@ export class PetkitPuramaxCard extends LitElement {
     // `config` itself (a plain-object stand-in in tests can mask this, but
     // `config.device_entities = ...` throws for real against a frozen one).
     const deviceEntities = config.device_entities || {};
-    if (!usesDeviceId && !deviceEntities.total_use) {
+    // See `requiredDeviceEntityField()` for the shared rule -- this is its
+    // config-parse-time call site (checked against hand-written
+    // `device_entities`, before `config.cats` is validated below, so it's
+    // called once here without `cats` -- the total_use half of the rule
+    // doesn't depend on it -- and once more after cats is confirmed a valid
+    // array, to also cover the last_used_by half).
+    if (!usesDeviceId && requiredDeviceEntityField(deviceEntities) === 'total_use') {
       throw new Error('petkit-puramax-card: "device_entities.total_use" is required in config (or set "device_id")');
     }
     if (!config.cats) {
@@ -145,7 +164,7 @@ export class PetkitPuramaxCard extends LitElement {
     // With a single cat, every visit is trivially theirs -- no need to know
     // which cat used the box, so last_used_by isn't required until there's
     // an actual ambiguity to resolve.
-    if (!usesDeviceId && config.cats.length > 1 && !deviceEntities.last_used_by) {
+    if (!usesDeviceId && requiredDeviceEntityField(deviceEntities, config.cats) === 'last_used_by') {
       throw new Error(
         'petkit-puramax-card: "device_entities.last_used_by" is required in config when more than one cat is configured (or set "device_id")',
       );
@@ -187,12 +206,16 @@ export class PetkitPuramaxCard extends LitElement {
   _configError() {
     if (this._config.device_id === undefined) return null;
     const noDeviceSelected = !this._config.device_id;
-    if (!this._deviceEntities.total_use) {
+    // See `requiredDeviceEntityField()` for the shared rule -- this is its
+    // hass-time call site, checked against `device_entities` after
+    // `device_id` auto-detection has resolved it.
+    const missingField = requiredDeviceEntityField(this._deviceEntities, this._config.cats);
+    if (missingField === 'total_use') {
       return noDeviceSelected
         ? 'A PetKit device is required. Select one in the card editor, or set "device_entities.total_use" manually.'
         : 'Could not auto-detect a "total use" sensor on the selected device. Set "device_entities.total_use" in the config to override.';
     }
-    if (this._config.cats.length > 1 && !this._deviceEntities.last_used_by) {
+    if (missingField === 'last_used_by') {
       return noDeviceSelected
         ? 'A PetKit device is required (or set "device_entities.last_used_by" manually) since more than one cat is configured.'
         : 'Could not auto-detect a "last used by" sensor on the selected device (required for more than one cat). Set "device_entities.last_used_by" in the config to override.';
@@ -217,16 +240,10 @@ export class PetkitPuramaxCard extends LitElement {
     return this._hass;
   }
 
-  // Forces Lit's normally-async render to happen synchronously, so the DOM
-  // reflects every mutating call (hass/setConfig/day-nav/etc.) the instant
-  // it returns -- matching this card's pre-Lit synchronous behavior. HA's
-  // real Lovelace host doesn't need this (no different than any other
-  // Lit-based custom card to it), but nothing inspects this card's
-  // shadowRoot synchronously in production either way, so forcing it costs
-  // nothing and avoids a stale-content frame.
+  // See `flushLitUpdate()` in ha-helpers.js for why this exists -- shared
+  // with the editor's own identical `_flush()`.
   _flush() {
-    this.requestUpdate();
-    if (this.isUpdatePending) this.performUpdate();
+    flushLitUpdate(this);
   }
 
   getCardSize() {
@@ -424,12 +441,11 @@ export class PetkitPuramaxCard extends LitElement {
     }
 
     const todayKey = dayKey(now.getTime());
-    const perCat = {};
-    cfg.cats.forEach((cat) => {
+    const perCat = perCatMap(cfg.cats, (cat) => {
       const events = visits.filter((v) => v.cat === cat).map((v) => ({ value: v.duration, ts: v.ts }));
       const byDay = bucketByDay(events, { dayKeyFn: dayKey });
       const lastVisitTs = events.length ? Math.max(...events.map((e) => e.ts)) : null;
-      perCat[cat.name] = { ...summarize(byDay, todayKey), lastVisitTs };
+      return { ...summarize(byDay, todayKey), lastVisitTs };
     });
     this._analytics = perCat;
     this._checkNoVisitAlerts();
@@ -786,10 +802,7 @@ export class PetkitPuramaxCard extends LitElement {
   _renderUsageBody() {
     const cfg = this._config;
     const visits = this._visits();
-    const perCat = {};
-    cfg.cats.forEach((cat) => {
-      perCat[cat.name] = { count: 0 };
-    });
+    const perCat = perCatMap(cfg.cats, () => ({ count: 0 }));
     let unknownCount = 0;
     let unknownColor = DEFAULT_UNKNOWN_CAT_COLOR;
     visits.forEach((v) => {
@@ -843,8 +856,7 @@ export class PetkitPuramaxCard extends LitElement {
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
     const records = eventHist
       .map((point) => {
-        const val = point.s ?? point.state;
-        const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
+        const { state: val, ts } = rawStateAndTs(point) ?? {};
         if (!val || !ts || excludeList.includes(val.toLowerCase())) return null;
         return {
           ts,

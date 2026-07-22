@@ -86,7 +86,7 @@
 
 import { LitElement, html, nothing } from 'lit';
 import { mdiTextShort, mdiPaw, mdiViewGridOutline, mdiGestureTapButton, mdiChartBar, mdiDragHorizontalVariant } from '@mdi/js';
-import { resolveEntityName } from '../../lib/ha-helpers.js';
+import { resolveEntityName, flushLitUpdate } from '../../lib/ha-helpers.js';
 import { EDITOR_STYLES } from './petkit-puramax-card-editor.styles.js';
 
 const ICON_CONTENT = mdiTextShort;
@@ -223,11 +223,10 @@ export class PetkitPuramaxCardEditor extends LitElement {
     return this._hass;
   }
 
-  // Forces Lit's normally-async render to happen synchronously -- see the
-  // class header comment for why.
+  // See `flushLitUpdate()` in ha-helpers.js for why this exists -- shared
+  // with the card's own identical `_flush()`.
   _flush() {
-    this.requestUpdate();
-    if (this.isUpdatePending) this.performUpdate();
+    flushLitUpdate(this);
   }
 
   _fireConfigChanged(newConfig) {

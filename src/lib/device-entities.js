@@ -42,6 +42,34 @@ export function resolveDeviceEntities(hass, deviceId) {
   return resolved;
 }
 
+/**
+ * The single required-field rule shared by the card's two independent
+ * validation call sites: `setConfig()` (config-parse time, before `hass`
+ * exists, checking `config.device_entities` as hand-written) and
+ * `_configError()` (hass-time, checking `device_entities` after `device_id`
+ * auto-detection has resolved it). Both need the exact same two rules --
+ * `total_use` must always resolve, and `last_used_by` must resolve too once
+ * more than one cat is configured (with a single cat, every visit is
+ * trivially theirs, so there's no identity ambiguity to resolve) -- so the
+ * rule itself lives here once; each call site builds its own throw-message /
+ * display-string around whichever field name this returns, since the two
+ * need different wording for the same underlying condition (one is a hard
+ * `throw` for someone hand-writing YAML, the other a softer "could not
+ * auto-detect" for a device already selected in the editor).
+ *
+ * Checked in this order (matching both call sites' existing check order):
+ * `total_use` first, `last_used_by` second.
+ *
+ * @param {{ total_use?: string, last_used_by?: string }} [deviceEntities]
+ * @param {Array<object>} [cats]
+ * @returns {'total_use'|'last_used_by'|null}
+ */
+export function requiredDeviceEntityField(deviceEntities, cats) {
+  if (!deviceEntities || !deviceEntities.total_use) return 'total_use';
+  if (Array.isArray(cats) && cats.length > 1 && !deviceEntities.last_used_by) return 'last_used_by';
+  return null;
+}
+
 function findByTranslationKey(hass, deviceId, translationKey) {
   if (!deviceId || !hass || !hass.entities) return undefined;
   return Object.values(hass.entities).find((entity) => entity.device_id === deviceId && entity.translation_key === translationKey);

@@ -5,6 +5,29 @@
  */
 
 /**
+ * Builds a `{ [cat.name]: value }` map with one entry per configured cat --
+ * the "seed a perCat map from the configured cat list" step the card's
+ * `_loadAnalytics()` (a multi-day, duration-bucketed rollup) and
+ * `_renderUsageBody()` (a flat same-day visit tally) both do identically
+ * before diverging into their own genuinely different aggregation shapes.
+ * `valueFn` computes each cat's own entry -- a zero-count tally seed, a
+ * fully computed multi-day summary, whatever the caller needs -- called
+ * once per cat, so a fresh object/value is produced per entry rather than
+ * one shared reference.
+ *
+ * @param {Array<{name: string}>} cats
+ * @param {(cat: object) => any} valueFn
+ * @returns {Record<string, any>}
+ */
+export function perCatMap(cats, valueFn) {
+  const map = {};
+  (cats || []).forEach((cat) => {
+    map[cat.name] = valueFn(cat);
+  });
+  return map;
+}
+
+/**
  * Groups events into per-day `{ count, total }` buckets.
  *
  * @param {Array<{ value: number, ts: number }>} events

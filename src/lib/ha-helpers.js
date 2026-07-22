@@ -151,3 +151,24 @@ export function pressButton(hass, entityId) {
   if (!entityId) return;
   callService(hass, 'button', 'press', { entity_id: entityId });
 }
+
+/**
+ * Forces a LitElement's normally-async render to happen synchronously (via
+ * Lit's own public `performUpdate()` -- its doc comment: "can be done in
+ * rare cases when you need to update synchronously"), so the DOM reflects a
+ * mutating call (the `hass` setter, `setConfig()`, a config-mutation method,
+ * day-nav, etc.) the instant that call returns. Neither `PetkitPuramaxCard`
+ * nor `PetkitPuramaxCardEditor` strictly need this for HA's real Lovelace
+ * host (no different than any other Lit-based custom element to it) -- it
+ * exists purely so each element's own pre-Lit synchronous behavior didn't
+ * change when they migrated onto LitElement: nothing that used to assume
+ * "the DOM is already up to date after this call returns" needed to change.
+ * Shared here since both classes' own `_flush()` method needs the exact same
+ * two lines.
+ *
+ * @param {import('lit').LitElement} el
+ */
+export function flushLitUpdate(el) {
+  el.requestUpdate();
+  if (el.isUpdatePending) el.performUpdate();
+}
