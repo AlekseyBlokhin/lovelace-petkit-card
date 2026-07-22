@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildHistoryRequest,
+  rawStateAndTs,
   parseHistoryPoint,
   pointsToEvents,
   deltaEvents,
@@ -75,6 +76,49 @@ describe('buildHistoryRequest', () => {
     expect(req.entity_ids).toEqual(['input_number.a', 'input_number.b']);
     expect(req.no_attributes).toBe(true);
     expect(req.minimal_response).toBe(false);
+  });
+});
+
+describe('rawStateAndTs', () => {
+  it('parses the compact WS shape (s/lu), leaving state as a raw string', () => {
+    expect(rawStateAndTs({ s: 'Cat A', lu: 1752570000 })).toEqual({ state: 'Cat A', ts: 1752570000000 });
+  });
+
+  it('parses the verbose REST shape (state/last_changed), leaving state as a raw string', () => {
+    const iso = '2026-07-15T12:00:00.000Z';
+    expect(rawStateAndTs({ state: 'unknown_pet', last_changed: iso })).toEqual({
+      state: 'unknown_pet',
+      ts: Date.parse(iso),
+    });
+  });
+
+  it('prefers compact keys when both are present', () => {
+    const result = rawStateAndTs({ s: 'Cat A', state: 'Cat B', lu: 1000, last_changed: '2020-01-01T00:00:00Z' });
+    expect(result.state).toBe('Cat A');
+    expect(result.ts).toBe(1000000);
+  });
+
+  it('does not numify or validate the state -- non-numeric strings pass through untouched', () => {
+    expect(rawStateAndTs({ s: 'unavailable', lu: 1000 })).toEqual({ state: 'unavailable', ts: 1000000 });
+  });
+
+  it('returns ts: null when there is no timestamp field at all', () => {
+    expect(rawStateAndTs({ s: '10' })).toEqual({ state: '10', ts: null });
+  });
+
+  it('returns a NaN ts (not null) for an unparseable last_changed string, unlike parseHistoryPoint', () => {
+    const result = rawStateAndTs({ s: '10', last_changed: 'not-a-date' });
+    expect(result.state).toBe('10');
+    expect(Number.isNaN(result.ts)).toBe(true);
+  });
+
+  it('returns null for null/undefined input', () => {
+    expect(rawStateAndTs(null)).toBeNull();
+    expect(rawStateAndTs(undefined)).toBeNull();
+  });
+
+  it('returns state: undefined when neither s nor state is present', () => {
+    expect(rawStateAndTs({ lu: 1000 })).toEqual({ state: undefined, ts: 1000000 });
   });
 });
 

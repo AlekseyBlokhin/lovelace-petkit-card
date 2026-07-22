@@ -47,22 +47,43 @@ export function buildHistoryRequest({ startTime, endTime, entityIds, includeStar
 }
 
 /**
- * Parses a single history point from a `history_during_period` response
- * into `{ value, ts }`, or `null` if it can't be parsed.
+ * Normalizes a single raw history point from a `history_during_period`
+ * response into `{ state, ts }`, or `null` if there's no point at all.
  *
  * The HA history WS response uses compact keys (`s` = state, `lu` = last
  * updated, epoch seconds) rather than the verbose REST shape
- * (`state`/`last_changed`, ISO strings) — this consolidates handling both,
- * which the original hand-authored card duplicated inline in four places.
+ * (`state`/`last_changed`, ISO strings) — this consolidates handling both
+ * shapes in one place, which the original hand-authored card duplicated
+ * inline in four places.
+ *
+ * Deliberately does NOT `parseFloat` the state or validate the timestamp —
+ * some callers (e.g. `catChangeEvents`) need the raw state string (a cat's
+ * name, or PURAMAX's `unknown_pet` placeholder), not a number.
+ * `parseHistoryPoint` below layers the numeric parsing/validation on top of
+ * this for callers that need a duration/counter value.
+ *
+ * @param {{ s?: string, state?: string, lu?: number, last_changed?: string }} point
+ * @returns {{ state: string|undefined, ts: number|null } | null}
+ */
+export function rawStateAndTs(point) {
+  if (!point) return null;
+  const state = point.s ?? point.state;
+  const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
+  return { state, ts };
+}
+
+/**
+ * Parses a single history point from a `history_during_period` response
+ * into `{ value, ts }`, or `null` if it can't be parsed.
  *
  * @param {{ s?: string, state?: string, lu?: number, last_changed?: string }} point
  * @returns {{ value: number, ts: number } | null}
  */
 export function parseHistoryPoint(point) {
-  if (!point) return null;
-  const rawValue = point.s ?? point.state;
-  const value = parseFloat(rawValue);
-  const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
+  const raw = rawStateAndTs(point);
+  if (!raw) return null;
+  const value = parseFloat(raw.state);
+  const { ts } = raw;
   if (!Number.isFinite(value) || !ts || Number.isNaN(ts)) return null;
   return { value, ts };
 }
@@ -176,12 +197,11 @@ export function catChangeEvents(historyForEntity, knownNames) {
   const nameSet = new Set(knownNames);
   const events = [];
   for (const point of historyForEntity) {
-    const state = point.s ?? point.state;
+    const { state, ts } = rawStateAndTs(point);
     let cat;
     if (nameSet.has(state)) cat = state;
     else if (state === UNKNOWN_CAT_STATE) cat = UNKNOWN_CAT_LABEL;
     else continue;
-    const ts = point.lu ? point.lu * 1000 : point.last_changed ? Date.parse(point.last_changed) : null;
     if (!ts || Number.isNaN(ts)) continue;
     events.push({ cat, ts });
   }
