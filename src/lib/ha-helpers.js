@@ -170,5 +170,8 @@ export function pressButton(hass, entityId) {
  */
 export function flushLitUpdate(el) {
   el.requestUpdate();
-  if (el.isUpdatePending) el.performUpdate();
+  // `performUpdate` is `protected` in Lit's own types (fine to call from
+  // within a subclass, not from an external helper like this one) -- cast
+  // needed since this file isn't part of the LitElement class hierarchy.
+  if (el.isUpdatePending) /** @type {any} */ (el).performUpdate();
 }
