@@ -29,36 +29,6 @@
 import { fireMoreInfo, callService } from './ha-helpers.js';
 
 /**
- * A trimmed-down `toggleEntity()`/`turnOnOffEntity()` (HA frontend's real
- * versions, in `src/panels/lovelace/common/entity/toggle-entity.ts` +
- * `turn-on-off-entity.ts`, handle every domain up to `lock`/`cover`/`scene`/
- * `valve` -- PETKIT devices never expose any of those, so this card only
- * needs `button`/`input_button` (`press`, no on/off state to read) and the
- * `turn_on`/`turn_off` default every other domain here actually uses, e.g.
- * `switch`). Deliberately NOT the generic backend `homeassistant.toggle`
- * service: that service (`homeassistant/components/homeassistant/__init__.py`,
- * `async_handle_turn_service`) only forwards to a domain if the domain has
- * literally registered a service named `toggle`, which most domains --
- * including `button`, used by several of this card's default controls --
- * never do, so calling it against those entities silently no-ops (a
- * backend warning log, no actual action) even though the exact same
- * `{action: 'toggle'}` config works from a native HA card.
- *
- * @param {any} hass
- * @param {string} entityId
- */
-function toggleEntity(hass, entityId) {
-  const domain = entityId.split('.', 1)[0];
-  if (domain === 'button' || domain === 'input_button') {
-    callService(hass, domain, 'press', { entity_id: entityId });
-    return;
-  }
-  const stateObj = hass.states[entityId];
-  const turnOn = !stateObj || stateObj.state === 'off';
-  callService(hass, domain, turnOn ? 'turn_on' : 'turn_off', { entity_id: entityId });
-}
-
-/**
  * @param {any} hass
  * @param {ActionConfig} [actionConfig]
  * @returns {boolean}
@@ -93,8 +63,32 @@ export function runAction(el, hass, actionConfig, fallbackEntity) {
       return;
     }
     case 'toggle': {
+      // Trimmed-down `toggleEntity()`/`turnOnOffEntity()` (HA frontend's real
+      // versions, in `src/panels/lovelace/common/entity/toggle-entity.ts` +
+      // `turn-on-off-entity.ts`, handle every domain up to `lock`/`cover`/
+      // `scene`/`valve` -- PETKIT devices never expose any of those, so this
+      // card only needs `button`/`input_button` (`press`, no on/off state to
+      // read) and the `turn_on`/`turn_off` default every other domain here
+      // actually uses, e.g. `switch`). Deliberately NOT the generic backend
+      // `homeassistant.toggle` service: that service
+      // (`homeassistant/components/homeassistant/__init__.py`,
+      // `async_handle_turn_service`) only forwards to a domain if the domain
+      // has literally registered a service named `toggle`, which most
+      // domains -- including `button`, used by several of this card's
+      // default controls -- never do, so calling it against those entities
+      // silently no-ops (a backend warning log, no actual action) even
+      // though the exact same `{action: 'toggle'}` config works from a
+      // native HA card.
       const entityId = config.entity || fallbackEntity;
-      if (entityId) toggleEntity(hass, entityId);
+      if (!entityId) return;
+      const domain = entityId.split('.', 1)[0];
+      if (domain === 'button' || domain === 'input_button') {
+        callService(hass, domain, 'press', { entity_id: entityId });
+        return;
+      }
+      const stateObj = hass.states[entityId];
+      const turnOn = !stateObj || stateObj.state === 'off';
+      callService(hass, domain, turnOn ? 'turn_on' : 'turn_off', { entity_id: entityId });
       return;
     }
     case 'perform-action':
