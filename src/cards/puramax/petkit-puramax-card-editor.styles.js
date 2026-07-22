@@ -7,6 +7,12 @@
 import { css } from 'lit';
 
 export const EDITOR_STYLES = css`
+  /* .list-view/.detail-view are both always mounted; only one is ever
+     visible at a time, toggled via the native \`hidden\` attribute rather
+     than a conditional template swap -- see the comment on \`render()\` in
+     the source for why. No explicit display rule needed here: the UA
+     stylesheet's own \`[hidden] { display: none }\` is enough since neither
+     class sets its own \`display\`. */
   .editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
   /* "Content" and "Analytics & alerts" are now hand-built
      ha-expansion-panel siblings too (not ha-form's own internal
