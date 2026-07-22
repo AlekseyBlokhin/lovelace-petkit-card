@@ -85,6 +85,14 @@ function detailForm(editor) {
   return editor.shadowRoot.querySelector('#detail-body ha-form');
 }
 
+function listView(editor) {
+  return editor.shadowRoot.querySelector('.list-view');
+}
+
+function detailView(editor) {
+  return editor.shadowRoot.querySelector('.detail-view');
+}
+
 function backButton(editor) {
   return editor.shadowRoot.querySelector('ha-icon-button-prev');
 }
@@ -428,8 +436,12 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
 
   it('clicking Edit on a status chip swaps the whole editor to a single full-field sub-page with a back button', () => {
     click(infoRows(editor)[0].querySelector('.edit-btn'));
-    expect(mainForm(editor)).toBeNull();
-    expect(editor.shadowRoot.querySelector('#cats-rows')).toBeNull();
+    // The list view (and its #cats-rows etc.) stays mounted in the DOM --
+    // only hidden -- so ha-expansion-panel state survives the round-trip;
+    // see the comment on render() in the source. What the user actually
+    // sees swap is the visible pane, asserted here via `.hidden`.
+    expect(listView(editor).hidden).toBe(true);
+    expect(detailView(editor).hidden).toBe(false);
     expect(backButton(editor)).not.toBeNull();
     expect(editor.shadowRoot.querySelector('.detail-title').textContent).toBe('Edit status chip');
     const schema = detailForm(editor).schema;
@@ -487,30 +499,30 @@ describe('PetkitPuramaxCardEditor: Edit sub-page navigation', () => {
 
   it('clicking the back button returns to the normal list view', () => {
     click(infoRows(editor)[0].querySelector('.edit-btn'));
-    expect(mainForm(editor)).toBeNull();
+    expect(listView(editor).hidden).toBe(true);
     click(backButton(editor));
+    expect(listView(editor).hidden).toBe(false);
     expect(mainForm(editor)).not.toBeNull();
     expect(infoRows(editor).length).toBe(1);
   });
 
-  it('preserves panel expanded state across a round-trip into the Edit sub-page and back', () => {
-    // The list view and the detail sub-page are two entirely different
-    // templates at the same render position -- switching between them
-    // disposes the old ha-expansion-panel elements and builds fresh ones,
-    // unlike a plain value/structural edit that stays on the list view
-    // (see the other describe block above, and the class header comment on
-    // `_openDetail`/`_closeDetail`). Panel order: Content, Analytics &
-    // alerts, Cats, Status chips, Controls.
-    const panels = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    panels[3].expanded = true; // Status chips
-    panels[4].expanded = true; // Controls
+  it('preserves panel expanded state (and node identity) across a round-trip into the Edit sub-page and back', () => {
+    // The list view stays mounted (just hidden) the whole time the Edit
+    // sub-page is open -- see the comment on render() in the source -- so
+    // its ha-expansion-panel elements are never disposed/recreated at all,
+    // unlike the old ternary-template-swap implementation this replaced.
+    // Panel order: Content, Analytics & alerts, Cats, Status chips, Controls.
+    const panelsBefore = Array.from(editor.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    panelsBefore[3].expanded = true; // Status chips
+    panelsBefore[4].expanded = true; // Controls
 
     click(infoRows(editor)[0].querySelector('.edit-btn'));
     click(backButton(editor));
 
-    const after = editor.shadowRoot.querySelectorAll('ha-expansion-panel');
-    expect(after[3].expanded).toBe(true);
-    expect(after[4].expanded).toBe(true);
+    const panelsAfter = Array.from(editor.shadowRoot.querySelectorAll('ha-expansion-panel'));
+    expect(panelsAfter).toEqual(panelsBefore);
+    expect(panelsAfter[3].expanded).toBe(true);
+    expect(panelsAfter[4].expanded).toBe(true);
   });
 
   it('a value-only setConfig round-trip while in the sub-page updates the form in place, not a rebuild', () => {

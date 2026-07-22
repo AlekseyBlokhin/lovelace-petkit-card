@@ -268,30 +268,57 @@ export class PetkitPuramaxCardEditor extends LitElement {
     return areaName || deviceName || null;
   }
 
+  // Both the list view and the detail sub-page are rendered on *every*
+  // render, as siblings, with only one shown at a time via the native
+  // `hidden` attribute -- not a ternary switching which template shape
+  // occupies one render position. A ternary would mean the list view's
+  // `ha-expansion-panel`s get disposed and rebuilt every time the user
+  // opens/closes the Edit sub-page (confirmed live -- headless verification
+  // caught this), silently collapsing whichever panels were open, because
+  // Lit only reuses a position's existing DOM when the template shape
+  // rendered there doesn't change between renders. Keeping both shapes
+  // permanently mounted at their own, never-changing positions makes that
+  // guarantee hold uniformly, so panel-open state (and anything else a
+  // native element keeps as internal state) survives the round-trip for
+  // free -- no need to manually read/write `ha-expansion-panel.expanded`
+  // (a third-party element's internal property, not a documented contract)
+  // around the swap.
   render() {
     if (!this._config) return nothing;
-    return this._detailEditor ? this._renderDetail() : this._renderList();
+    const detailSpec = this._resolveDetailSpec();
+    return html`
+      <div class="detail-view" ?hidden=${!detailSpec}>${detailSpec ? this._renderDetail(detailSpec) : nothing}</div>
+      <div class="list-view" ?hidden=${!!detailSpec}>${this._renderList()}</div>
+    `;
   }
 
   // ---------- sub-page detail editor (Edit on a chip/control row) ----------
 
-  _renderDetail() {
+  // Resolved once per render, here rather than inside `_renderDetail()`, so
+  // `render()` can decide in the very same pass whether to show the detail
+  // pane or fall back to the list pane -- e.g. if the row being edited
+  // vanished out from under us (shouldn't normally happen, but config can
+  // change from outside while this sub-page is open). Can't mutate reactive
+  // state synchronously mid-render, so the reset below is deferred a tick;
+  // the list pane is already the one shown for that one frame (`detailSpec`
+  // is falsy here), so nothing dead ever shows.
+  _resolveDetailSpec() {
+    if (!this._detailEditor) return null;
     const { kind, index } = this._detailEditor;
     const key = kind === 'info' ? 'info_row' : 'controls_row';
-    const list = this._config[key] || [];
-    const spec = list[index];
+    const spec = (this._config[key] || [])[index];
     if (!spec) {
-      // The row vanished from under us (shouldn't normally happen) -- fall
-      // back to the list view instead of rendering a dead sub-page. Can't
-      // mutate reactive state synchronously mid-render, so this is
-      // deferred a tick; the list view below is rendered directly in the
-      // meantime so nothing dead shows even for that one frame.
       queueMicrotask(() => {
         this._detailEditor = null;
         this._flush();
       });
-      return this._renderList();
+      return null;
     }
+    return spec;
+  }
+
+  _renderDetail(spec) {
+    const { kind, index } = this._detailEditor;
     const schema = kind === 'info' ? INFO_ROW_SCHEMA : CONTROLS_ROW_SCHEMA;
     const title = kind === 'info' ? 'Edit status chip' : 'Edit control';
     return html`
@@ -317,49 +344,14 @@ export class PetkitPuramaxCardEditor extends LitElement {
   _closeDetail() {
     this._detailEditor = null;
     this._flush();
-    // Restore below, not deleted -- see the capture in `_openDetail()` for
-    // why this one case still needs it even with Lit's diffing.
-    this._restorePanelExpanded(this._capturedPanelExpanded);
-    this._capturedPanelExpanded = null;
   }
 
   _updateRowAt(kind, index, newSpec) {
     const key = kind === 'info' ? 'info_row' : 'controls_row';
-    const list = [...(this._config[key] || [])];
-    list[index] = newSpec;
-    this._fireConfigChanged({ ...this._config, [key]: list });
-  }
-
-  // Lit's diffing reuses existing DOM nodes (and whatever local state they
-  // hold, like `ha-expansion-panel.expanded`) whenever the template SHAPE
-  // at a given position doesn't change between renders -- which is true for
-  // every plain config edit (add/remove/reorder/value change), and is what
-  // lets the rest of this class skip the capture/restore bookkeeping the
-  // pre-Lit version needed everywhere. It is NOT true here: the list view
-  // and the detail sub-page are two entirely different templates at the
-  // same render position, so switching between them necessarily disposes
-  // the old subtree (including its `ha-expansion-panel`s) and builds a
-  // fresh one -- confirmed live (headless verification caught this; no
-  // existing test covered the list→detail→back round-trip specifically).
-  // Capturing here (still in list view) and restoring in `_closeDetail()`
-  // (right after the fresh panels exist again) is the smallest fix for
-  // that one genuine exception, not a wholesale revival of the old
-  // always-capture pattern.
-  _capturePanelExpanded() {
-    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
-    return panels.length ? Array.from(panels).map((p) => /** @type {any} */ (p).expanded) : null;
-  }
-
-  _restorePanelExpanded(prevExpanded) {
-    if (!prevExpanded) return;
-    const panels = /** @type {any} */ (this.shadowRoot.querySelectorAll('ha-expansion-panel'));
-    panels.forEach((/** @type {any} */ panel, i) => {
-      if (prevExpanded[i] !== undefined) panel.expanded = prevExpanded[i];
-    });
+    this._updateItem(key, index, newSpec);
   }
 
   _openDetail(kind, index) {
-    this._capturedPanelExpanded = this._capturePanelExpanded();
     this._detailEditor = { kind, index };
     this._flush();
   }
@@ -497,25 +489,50 @@ export class PetkitPuramaxCardEditor extends LitElement {
   }
 
   _updateCat(index, newCat) {
-    const cats = [...(this._config.cats || [])];
-    cats[index] = newCat;
-    this._fireConfigChanged({ ...this._config, cats });
+    this._updateItem('cats', index, newCat);
   }
 
   _moveCat(oldIndex, newIndex) {
-    const cats = (this._config.cats || []).concat();
-    cats.splice(newIndex, 0, cats.splice(oldIndex, 1)[0]);
-    this._fireConfigChanged({ ...this._config, cats });
+    this._moveItem('cats', oldIndex, newIndex);
   }
 
   _addCat() {
-    const cats = [...(this._config.cats || []), { ...DEFAULT_NEW_CAT }];
-    this._fireConfigChanged({ ...this._config, cats });
+    this._addItem('cats', { ...DEFAULT_NEW_CAT });
   }
 
   _removeCat(index) {
-    const cats = (this._config.cats || []).filter((_cat, i) => i !== index);
-    this._fireConfigChanged({ ...this._config, cats });
+    this._removeItem('cats', index);
+  }
+
+  // ---------- generic array-config mutation helpers ----------
+  // `cats`/`info_row`/`controls_row` all mutate the exact same way (splice/
+  // filter/push on a top-level config array, then `_fireConfigChanged` with
+  // the rest of the config spread in) -- only the key and, for `add`, the
+  // per-kind default item shape differ. Kept here as the single place that
+  // logic lives; each kind above/below gets a thin one-line wrapper (or
+  // calls these directly) so call sites still read by name (`_addCat`,
+  // `_moveInfoRow`, ...) rather than a bare string key.
+
+  _updateItem(key, index, newItem) {
+    const list = [...(this._config[key] || [])];
+    list[index] = newItem;
+    this._fireConfigChanged({ ...this._config, [key]: list });
+  }
+
+  _moveItem(key, oldIndex, newIndex) {
+    const list = (this._config[key] || []).concat();
+    list.splice(newIndex, 0, list.splice(oldIndex, 1)[0]);
+    this._fireConfigChanged({ ...this._config, [key]: list });
+  }
+
+  _addItem(key, item) {
+    const list = [...(this._config[key] || []), item];
+    this._fireConfigChanged({ ...this._config, [key]: list });
+  }
+
+  _removeItem(key, index) {
+    const list = (this._config[key] || []).filter((_item, i) => i !== index);
+    this._fireConfigChanged({ ...this._config, [key]: list });
   }
 
   // ---------- info_row / controls_row: draggable summary list + Edit sub-page ----------
@@ -583,38 +600,30 @@ export class PetkitPuramaxCardEditor extends LitElement {
   // No `name`/`icon` baked in -- left unset, exactly like hand-writing
   // just `entity:` in YAML, so the card resolves both live from the entity.
   _addInfoRowFromEntity(entityId) {
-    const infoRow = [...(this._config.info_row || []), { entity: entityId }];
-    this._fireConfigChanged({ ...this._config, info_row: infoRow });
+    this._addItem('info_row', { entity: entityId });
   }
 
   _moveInfoRow(oldIndex, newIndex) {
-    const infoRow = (this._config.info_row || []).concat();
-    infoRow.splice(newIndex, 0, infoRow.splice(oldIndex, 1)[0]);
-    this._fireConfigChanged({ ...this._config, info_row: infoRow });
+    this._moveItem('info_row', oldIndex, newIndex);
   }
 
   _removeInfoRow(index) {
-    const infoRow = (this._config.info_row || []).filter((_spec, i) => i !== index);
-    this._fireConfigChanged({ ...this._config, info_row: infoRow });
+    this._removeItem('info_row', index);
   }
 
   // No `name`/`icon`/`tap_action` baked in either -- an unset tap_action
   // falls back to `more-info` (see src/lib/actions.js), the same default
   // any entity gets when tapped with no explicit action configured.
   _addControlRowFromEntity(entityId) {
-    const controlsRow = [...(this._config.controls_row || []), { entity: entityId }];
-    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
+    this._addItem('controls_row', { entity: entityId });
   }
 
   _moveControlRow(oldIndex, newIndex) {
-    const controlsRow = (this._config.controls_row || []).concat();
-    controlsRow.splice(newIndex, 0, controlsRow.splice(oldIndex, 1)[0]);
-    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
+    this._moveItem('controls_row', oldIndex, newIndex);
   }
 
   _removeControlRow(index) {
-    const controlsRow = (this._config.controls_row || []).filter((_spec, i) => i !== index);
-    this._fireConfigChanged({ ...this._config, controls_row: controlsRow });
+    this._removeItem('controls_row', index);
   }
 
   // The `show_*` toggles default to true when absent from config (the card
