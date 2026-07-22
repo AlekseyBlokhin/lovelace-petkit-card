@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { PetkitPuramaxCard } from '../../src/cards/puramax/petkit-puramax-card.js';
 import { dayBounds } from '../../src/lib/day.js';
 import { CHART_WIDTH, CHART_PADDING } from '../../src/cards/puramax/petkit-puramax-card.const.js';
+import { formatDuration } from '../../src/lib/format.js';
 
 if (!customElements.get('petkit-puramax-card')) {
   customElements.define('petkit-puramax-card', PetkitPuramaxCard);
@@ -1653,5 +1654,76 @@ describe('regression: no hardcoded entity ids in logic/rendering source', () => 
 
   it('sanity check: the entity-id pattern actually matches a known placeholder (proves the regex isn\'t vacuous)', () => {
     expect('input_number.example_cat_last_visit_duration').toMatch(ENTITY_ID_PATTERN);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('PetkitPuramaxCard: chart tooltip (hover a .visit-hit line)', () => {
+  // `_showChartTooltip`/`_hideChartTooltip` mutate `#chart-tooltip` directly
+  // (textContent/style/classList) rather than going through Lit's reactive
+  // render -- a transient hover effect, imperative on purpose (see the
+  // doc comment on `_showChartTooltip` in petkit-puramax-card.js). None of
+  // the render-assertion-style tests elsewhere in this file happen to
+  // exercise `mouseenter`/`mouseleave` on `.visit-hit`, so this is dedicated
+  // coverage for that path.
+  async function makeCardWithOneVisit() {
+    const card = makeCard();
+    card.setConfig(baseConfig());
+    const visitTs = dayBounds(0).start.getTime() + 600 * 1000; // 10 min after local midnight
+    const totalUsePoints = [
+      { s: '0', lu: Math.floor(dayBounds(0).start.getTime() / 1000) },
+      { s: '50', lu: Math.floor(visitTs / 1000) }, // one visit, duration 50s
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+    return { card, visitTs };
+  }
+
+  it('mouseenter on the .visit-hit line fills in the tooltip text and marks it visible', async () => {
+    const { card, visitTs } = await makeCardWithOneVisit();
+    const hit = card.shadowRoot.querySelector('.visit-hit');
+    expect(hit).not.toBeNull();
+    const tooltip = card.shadowRoot.getElementById('chart-tooltip');
+    expect(tooltip.classList.contains('visible')).toBe(false);
+
+    hit.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+
+    const expectedTime = new Date(visitTs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    expect(tooltip.textContent).toBe(`${expectedTime} · Cat A · ${formatDuration(50)}`);
+    expect(tooltip.classList.contains('visible')).toBe(true);
+  });
+
+  it('positions the tooltip via style.left/style.top computed from the hit target (parseable px, not just unset)', async () => {
+    const { card } = await makeCardWithOneVisit();
+    const hit = card.shadowRoot.querySelector('.visit-hit');
+
+    hit.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+
+    const tooltip = card.shadowRoot.getElementById('chart-tooltip');
+    // happy-dom has no real layout engine, so exact pixel positions aren't
+    // meaningful here -- just assert both are set to a parseable `px` value
+    // (i.e. the imperative getBoundingClientRect()-based positioning code
+    // actually ran), not exact geometry.
+    expect(tooltip.style.left).toMatch(/^-?\d+(\.\d+)?px$/);
+    expect(tooltip.style.top).toMatch(/^-?\d+(\.\d+)?px$/);
+  });
+
+  it('mouseleave hides the tooltip again', async () => {
+    const { card } = await makeCardWithOneVisit();
+    const hit = card.shadowRoot.querySelector('.visit-hit');
+    const tooltip = card.shadowRoot.getElementById('chart-tooltip');
+
+    hit.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(tooltip.classList.contains('visible')).toBe(true);
+
+    hit.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(tooltip.classList.contains('visible')).toBe(false);
   });
 });
