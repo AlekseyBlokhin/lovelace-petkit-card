@@ -8,6 +8,7 @@ import {
   catChangeEvents,
   attributeCats,
   dedupeFlickerRepeats,
+  expandConfirmedRepeats,
   UNKNOWN_CAT_STATE,
   UNKNOWN_CAT_LABEL,
 } from '../../src/lib/history.js';
@@ -789,6 +790,108 @@ describe('dedupeFlickerRepeats', () => {
         { state: 'Cat A used the litter box', ts: 1784171902253.726 },
       ]);
     });
+  });
+});
+
+describe('expandConfirmedRepeats', () => {
+  it('returns the input unchanged when there are no confirmed timestamps at all', () => {
+    const events = [{ state: 'maintenance_mode', ts: 1000 }];
+    expect(expandConfirmedRepeats(events, [])).toEqual(events);
+    expect(expandConfirmedRepeats(events, undefined)).toEqual(events);
+  });
+
+  it('returns an empty array for missing/non-array events input', () => {
+    expect(expandConfirmedRepeats([], [1000])).toEqual([]);
+    expect(expandConfirmedRepeats(undefined, [1000])).toEqual([]);
+  });
+
+  it('leaves a row alone when its territory has zero or one confirmed timestamp (the common case)', () => {
+    const events = [{ state: 'maintenance_mode', ts: 1000 }];
+    // total_use knows nothing about a device-status event like this -- no
+    // confirmed timestamp anywhere nearby.
+    expect(expandConfirmedRepeats(events, [500000])).toEqual(events);
+  });
+
+  it('does not add a row when exactly one confirmed timestamp matches the existing row', () => {
+    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    expect(expandConfirmedRepeats(events, [1000])).toEqual(events);
+  });
+
+  it('adds one extra row per additional confirmed timestamp in the same territory, reusing the row\'s own text', () => {
+    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    expect(expandConfirmedRepeats(events, [1000, 61000])).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Cat A used the litter box', ts: 61000 },
+    ]);
+  });
+
+  it('adds a row for every extra confirmed timestamp when there are more than two in one territory', () => {
+    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    expect(expandConfirmedRepeats(events, [1000, 61000, 121000])).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Cat A used the litter box', ts: 61000 },
+      { state: 'Cat A used the litter box', ts: 121000 },
+    ]);
+  });
+
+  it('never reaches a confirmed timestamp across a neighboring kept row\'s territory boundary', () => {
+    const events = [
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Maintenance mode', ts: 100000 },
+    ];
+    // Placed just past the midpoint (50500) between the two rows, so it
+    // falls into Maintenance mode's territory rather than Cat A's, even
+    // though Cat A's text is what a naive "nearest same-text repeat" guess
+    // might expect.
+    const confirmedJustPastMidpoint = (1000 + 100000) / 2 + 1;
+    const result = expandConfirmedRepeats(events, [1000, confirmedJustPastMidpoint]);
+    // Maintenance mode's territory got the extra confirmed timestamp, but it
+    // has no companion there (only 1 match), so nothing is added -- and Cat
+    // A's territory only had its own single match, so no extra row anywhere.
+    expect(result).toEqual(events);
+  });
+
+  it('claims the confirmed timestamp NEAREST to the row\'s own ts, not just the first one in the territory', () => {
+    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    // 900 is nearer to 1000 than 50000 is -- 900 should be treated as
+    // "already represented" by the existing row, and 50000 as the extra.
+    expect(expandConfirmedRepeats(events, [50000, 900])).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Cat A used the litter box', ts: 50000 },
+    ]);
+  });
+
+  it('sorts the final output by timestamp, interleaving synthesized rows with the following real row', () => {
+    const events = [
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Maintenance mode', ts: 200000 },
+    ];
+    const result = expandConfirmedRepeats(events, [1000, 60000]);
+    expect(result).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Cat A used the litter box', ts: 60000 },
+      { state: 'Maintenance mode', ts: 200000 },
+    ]);
+  });
+
+  // --------------------------------------------------------------------
+  // REGRESSION (reported live 2026-07-24): total_use confirmed two real
+  // visits by the same cat about a minute apart (+43s at 16:03:15 UTC, +46s at
+  // 16:04:17 UTC); last_event only ever got ONE history point ("Cat A used
+  // the litter box" at 16:03:15.628) because its value was already that
+  // exact text from the first visit -- the second visit didn't change it,
+  // so HA's recorder never wrote a second point at all. Working Records
+  // showed one row where the chart (built from total_use independently)
+  // showed two. Real timestamps in epoch ms (already *1000'd, matching
+  // dedupeFlickerRepeats' own output shape).
+  // --------------------------------------------------------------------
+  it('REGRESSION: adds back a real visit last_event never got its own history point for', () => {
+    const dedupedEvents = [{ state: 'Cat A used the litter box', ts: 1753373095628 }]; // 16:03:15.628 UTC
+    const confirmedEventTimestamps = [1753373095627, 1753373157443]; // 16:03:15.627 and 16:04:17.443 UTC
+    expect(expandConfirmedRepeats(dedupedEvents, confirmedEventTimestamps)).toEqual([
+      { state: 'Cat A used the litter box', ts: 1753373095628 },
+      { state: 'Cat A used the litter box', ts: 1753373157443 },
+    ]);
   });
 });
 

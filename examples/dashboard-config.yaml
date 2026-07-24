@@ -23,12 +23,12 @@ device_id: 400018390abc123
 #   last_event: sensor.petkit_puramax_last_event
 #   state: sensor.petkit_puramax_state
 
-# Optional: relabel or add device event states without editing the card.
-# Merged over the built-in PURAMAX defaults (this config wins on conflicts).
-event_labels:
-  maintenance_mode: Maintenance mode
-  manual_odor_completed: Manual odor removal done
-  auto_cleaning_completed: Auto cleaning done
+# Optional: hide specific raw last_event values from Working Records
+# entirely (replaces this default list rather than merging with it).
+# event_exclude:
+#   - unavailable
+#   - unknown
+#   - no_events_yet
 
 # Every section below defaults to shown; set any of these to false to hide it.
 # show_state: true
@@ -38,11 +38,11 @@ event_labels:
 
 cats:
   # name must exactly match this cat's value as reported by
-  # device_entities.last_used_by. color accepts a raw CSS color (hex, as
-  # here) or a named HA palette color like "blue"/"deep-orange" (what the
-  # visual editor's color picker writes when you pick a swatch).
+  # device_entities.last_used_by. color accepts a named HA palette color
+  # like "light-blue"/"deep-orange" (what the visual editor's color picker
+  # writes when you pick a swatch) or a raw CSS color (e.g. a hex code).
   - name: Whiskers
-    color: "#4fc3f7"
+    color: "light-blue"
   - name: Mittens
     color: "deep-orange"
 

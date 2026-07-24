@@ -8,6 +8,7 @@ import {
   catChangeEvents,
   attributeCats,
   dedupeFlickerRepeats,
+  expandConfirmedRepeats,
   UNKNOWN_CAT_LABEL,
 } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
@@ -615,7 +616,11 @@ export class PetkitPuramaxCard extends LitElement {
     const cfg = this._config;
     const de = this._deviceEntities;
     const errorState = this._s(de.error, 'no_error');
-    const hasError = errorState && errorState !== 'no_error';
+    // `unavailable`/`unknown` mean "the entity hasn't reported a value" (a
+    // coordinator hiccup, same flicker documented for last_event/
+    // last_used_by elsewhere in this file), never "there is a real error" --
+    // showing an "Error: unavailable" chip would be actively misleading.
+    const hasError = errorState && !['no_error', 'unavailable', 'unknown'].includes(errorState.toLowerCase());
     const infoRow = cfg.info_row || [];
     return html`
       ${infoRow.map((spec) => this._renderInfoChip(spec))}
@@ -856,22 +861,29 @@ export class PetkitPuramaxCard extends LitElement {
   // view would show dozens of duplicate rows for a single real event).
   // The ONLY cross-reference to the total_use/last_used_by reconstruction
   // is `this._chartVisits`' own timestamps, passed through as
-  // `confirmedEventTimestamps` -- a narrow, binary "did an independently
-  // verified visit happen near here" signal used purely to tell a genuine
-  // flicker-repeat apart from two separate real visits that happen to share
-  // identical text (confirmed real case, 2026-07-16 -- see
-  // `dedupeFlickerRepeats`'s doc comment). This is NOT the full
-  // merge/re-synthesis (replacing last_event's own text, matching every row
-  // 1:1 against total_use) that caused real bugs before (see git history /
-  // issues #13, #14, #16); it never changes what a row says, only whether a
-  // same-text repeat right after a hidden state counts as new.
+  // `confirmedEventTimestamps` to two narrow, binary "did an independently
+  // verified visit happen near here" checks -- never a full merge/
+  // re-synthesis (replacing last_event's own text, matching every row 1:1
+  // against total_use) like the approach that caused real bugs before (see
+  // git history / issues #13, #14, #16):
+  //  - `dedupeFlickerRepeats` uses it to tell a genuine flicker-repeat apart
+  //    from two separate real visits that happen to share identical text
+  //    (confirmed real case, 2026-07-16).
+  //  - `expandConfirmedRepeats` uses it to add back a real visit that
+  //    `last_event` never got its own history point for AT ALL, because its
+  //    value didn't change and nothing flickered (confirmed real case,
+  //    2026-07-24 -- see that function's doc comment).
+  // Neither ever changes what an EXISTING row says, only whether a
+  // same-text repeat counts as new / how many rows a run of identical text
+  // becomes.
   _renderRecordsSection() {
     const cfg = this._config;
     const eventHist = this._chartEventHist || [];
     const lastEventEntity = this._deviceEntities.last_event;
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
     const confirmedEventTimestamps = (this._chartVisits || []).map((v) => v.ts);
-    const records = dedupeFlickerRepeats(eventHist, excludeList, { confirmedEventTimestamps }).map(({ state, ts }) => ({
+    const dedupedEvents = dedupeFlickerRepeats(eventHist, excludeList, { confirmedEventTimestamps });
+    const records = expandConfirmedRepeats(dedupedEvents, confirmedEventTimestamps).map(({ state, ts }) => ({
       ts,
       icon: 'mdi:information-outline',
       color: 'var(--secondary-text-color)',

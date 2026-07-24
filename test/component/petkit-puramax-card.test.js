@@ -323,6 +323,23 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(card.shadowRoot.querySelector('.chip.warn')).not.toBeNull();
   });
 
+  // REGRESSION (reported live): the error entity going `unavailable` (a
+  // coordinator hiccup, same flicker documented for last_event/last_used_by)
+  // rendered an "Error: unavailable" chip -- actively misleading, since
+  // unavailable means "no assertion at all," not "there is a real error."
+  it.each(['unavailable', 'unknown', 'Unavailable', 'UNKNOWN'])(
+    'does NOT show an Error chip when the error entity itself is "%s"',
+    async (state) => {
+      const cfg = baseConfig();
+      card.setConfig(cfg);
+      card.hass = makeHass({ 'sensor.test_petkit_error': { state } });
+      await flush();
+      expect(card.shadowRoot.querySelector('.chip.warn')).toBeNull();
+      const chips = Array.from(card.shadowRoot.querySelectorAll('.chip-label')).map((el) => el.textContent);
+      expect(chips).not.toContain('Error');
+    },
+  );
+
   it('escapes a malicious entity state value instead of injecting it into the DOM (XSS regression)', async () => {
     // info_row can point at ANY entity, not just PETKIT's own narrow-enum
     // sensors -- a state value is untrusted input as far as this card is
@@ -1158,6 +1175,72 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
     const rows = card.shadowRoot.querySelectorAll('.record-row');
     const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
     expect(texts.filter((t) => t === 'Cat A used the litter box').length).toBe(2);
+  });
+
+  it('shows a real visit total_use confirms even when last_event never got its own history point for it at all', async () => {
+    // REGRESSION (reported live 2026-07-24): total_use confirmed two real
+    // visits by the same cat about a minute apart. last_event only had ONE
+    // history point for them -- its value was already the exact same text
+    // from the first visit, so the second, identical-text visit never
+    // changed it and HA's recorder never wrote a second point. No
+    // unavailable flicker involved at all; there's nothing to merge/not
+    // merge here, the data for the second visit simply doesn't exist in
+    // last_event's own stream. Working Records must borrow the count from
+    // total_use's independent reconstruction (which already handles this
+    // correctly for the chart) to show both.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: t0 }]; // ONE raw point for two real visits
+    const totalUsePoints = [
+      { s: '0', lu: t0 - 60 },
+      { s: '43', lu: t0 }, // real visit #1 -- matches the last_event point
+      { s: '46', lu: t0 + 62 }, // real visit #2 -- no matching last_event point at all
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts.filter((t) => t === 'Cat A used the litter box').length).toBe(2);
+  });
+
+  it('does not fabricate an extra row for a device-status event that total_use knows nothing about', async () => {
+    // total_use only tracks litter-box visits -- a repeated device-status
+    // event (e.g. maintenance_mode) must never gain a synthesized row just
+    // because some unrelated real visit happens to land in its territory.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
+    const lastEventHistory = [{ s: 'maintenance_mode', lu: t0 }];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
   });
 
   it('renders last_event history through hass.formatEntityState (HA\'s own translation), not a hand-rolled label map', async () => {

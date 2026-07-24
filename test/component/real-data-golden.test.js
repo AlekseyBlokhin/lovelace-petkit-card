@@ -25,7 +25,7 @@ if (!customElements.get('petkit-puramax-card')) {
 }
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
-const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16'];
+const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16', '2026-07-24'];
 
 function loadFixture(day) {
   return JSON.parse(readFileSync(join(FIXTURES_DIR, `${day}.json`), 'utf-8'));

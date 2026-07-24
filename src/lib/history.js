@@ -242,6 +242,82 @@ export function dedupeFlickerRepeats(historyForEntity, hiddenStates, options = {
 }
 
 /**
+ * Fills in a real confirmed visit that `last_event` never got its OWN raw
+ * history point for at all -- distinct from (and complementary to)
+ * `dedupeFlickerRepeats`'s job of deciding whether an EXISTING repeated raw
+ * point is a new event or not. `last_event` only gets a new history point
+ * when its value actually CHANGES; two consecutive real visits with
+ * identical narration text (typically the same cat visiting again shortly
+ * after) and no `unavailable` flicker in between produce NO second history
+ * point whatsoever -- there's nothing for `dedupeFlickerRepeats` to even
+ * see, let alone merge or keep.
+ *
+ * REGRESSION (reported live 2026-07-24): total_use confirmed two real
+ * visits by the same cat about a minute apart (+43s at 16:03:15, +46s at
+ * 16:04:17 UTC); `last_event` only had a single raw point, for the first
+ * one -- its value was already "Cat A used the litter box" from that first
+ * visit, so the second, identical-text visit never changed it and HA's
+ * recorder never wrote anything for it. Working Records showed only one
+ * row where the chart (which reconstructs visits from `total_use`
+ * independently, and already carries an unresolved identity/cat forward
+ * across a repeat visit exactly the same way -- see `attributeCats`) showed
+ * two.
+ *
+ * Uses the same territory-bounded nearest-neighbor technique as
+ * `attributeCats` (bounded by the midpoint to each neighboring EVENT in
+ * `events`, so a confirmed timestamp can never be pulled across a
+ * neighboring kept row no matter how far it has to reach): for each kept
+ * event, the nearest confirmed timestamp in its territory is treated as the
+ * one that's already represented by that row; every OTHER confirmed
+ * timestamp in the same territory is a real, independently-verified repeat
+ * with no history point of its own, and gets its own new row -- same text,
+ * its own real confirmed timestamp. A territory with zero or one confirmed
+ * timestamps (the common case -- most `last_event` values, e.g.
+ * `maintenance_mode`, have nothing to do with `total_use` at all) is left
+ * untouched.
+ *
+ * @param {Array<{ state: string, ts: number }>} events - ascending by ts,
+ *   e.g. `dedupeFlickerRepeats`'s own output.
+ * @param {number[]} confirmedEventTimestamps
+ * @returns {Array<{ state: string, ts: number }>} ascending by ts.
+ */
+export function expandConfirmedRepeats(events, confirmedEventTimestamps) {
+  if (!Array.isArray(events) || events.length === 0) return events || [];
+  if (!Array.isArray(confirmedEventTimestamps) || confirmedEventTimestamps.length === 0) return events;
+
+  const confirmed = [...confirmedEventTimestamps].sort((a, b) => a - b);
+  const n = events.length;
+  const expanded = [];
+
+  for (let i = 0; i < n; i++) {
+    const ts = events[i].ts;
+    const lowerBound = i === 0 ? -Infinity : (events[i - 1].ts + ts) / 2;
+    const upperBound = i === n - 1 ? Infinity : (ts + events[i + 1].ts) / 2;
+    const inTerritory = confirmed.filter((c) => c >= lowerBound && c < upperBound);
+
+    expanded.push(events[i]);
+    if (inTerritory.length <= 1) continue;
+
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    inTerritory.forEach((c, idx) => {
+      const dist = Math.abs(c - ts);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = idx;
+      }
+    });
+    inTerritory.forEach((c, idx) => {
+      if (idx === nearestIdx) return;
+      expanded.push({ state: events[i].state, ts: c });
+    });
+  }
+
+  expanded.sort((a, b) => a.ts - b.ts);
+  return expanded;
+}
+
+/**
  * PetKit PURAMAX firmware's own placeholder identity value on `last_used_by`
  * for a visit whose cat it couldn't recognize (as opposed to `unavailable`/
  * `no_record_yet`, which mean "no assertion at all", not "asserting

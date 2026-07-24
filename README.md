@@ -119,7 +119,7 @@ type: custom:petkit-puramax-card
 device_id: <your PetKit device>
 cats:
   - name: Whiskers
-    color: "#4fc3f7"
+    color: "light-blue"
 ```
 
 `device_id` (pick it from a native device picker in the visual editor)
@@ -135,10 +135,10 @@ device_entities:
   total_use: sensor.petkit_puramax_total_use
 cats:
   - name: Whiskers
-    color: "#4fc3f7"
+    color: "light-blue"
 ```
 
-For status chips, control buttons, a second cat, custom event labels, and
+For status chips, control buttons, a second cat, event exclusion, and
 alerts, see the [Configuration reference](#configuration-reference) below,
 or a full example at
 [`examples/dashboard-config.yaml`](./examples/dashboard-config.yaml).

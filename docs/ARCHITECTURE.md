@@ -93,3 +93,28 @@ Two things filter/collapse the raw `last_event` stream:
   rows. This is deliberately narrower than the reconciliation approach that
   caused the earlier bugs above: it never touches a row's text or duration,
   and it only ever affects the flicker-recovery merge decision.
+
+- **`expandConfirmedRepeats`** (`src/lib/history.js`) solves a different
+  problem: a real visit that `last_event` never got a history point for AT
+  ALL. `last_event` only gets a new point when its value actually changes —
+  two consecutive real visits with identical narration text (typically the
+  same cat visiting again shortly after) and no `unavailable` flicker
+  between them produce NO second history point whatsoever, so there's
+  nothing for `dedupeFlickerRepeats` to even see. Real captured case
+  (2026-07-24): `total_use` confirmed two real visits by the same cat about
+  a minute apart; `last_event` had exactly one raw point, for the first one.
+  `expandConfirmedRepeats` runs on `dedupeFlickerRepeats`'s output using the
+  same territory-bounded nearest-neighbor technique as `attributeCats`
+  (bounded by the midpoint to each neighboring row, so a confirmed timestamp
+  can never be pulled across a neighboring row no matter how far it has to
+  reach): the confirmed timestamp nearest a kept row's own ts is treated as
+  already represented by it; any OTHER confirmed timestamp in the same
+  territory gets its own new row, reusing that row's exact text. A territory
+  with zero or one confirmed timestamp (the common case — most `last_event`
+  values have nothing to do with `total_use` at all) is untouched.
+
+Both of these are narrow, binary cross-checks against `total_use`'s own
+visit reconstruction (already fetched for the chart) — never the kind of
+full merge/re-synthesis (replacing a row's text, matching every row 1:1)
+that caused the earlier bugs. Neither ever invents new text; they only
+decide how many rows a run of identical `last_event` text becomes.
