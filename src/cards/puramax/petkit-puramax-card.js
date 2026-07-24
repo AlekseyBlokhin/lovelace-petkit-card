@@ -127,6 +127,7 @@ export class PetkitPuramaxCard extends LitElement {
   constructor() {
     super();
     this._dayOffset = 0;
+    this._chartDayOffset = 0;
     this._chartVisits = [];
     this._chartEventHist = [];
     this._analytics = null;
@@ -188,6 +189,7 @@ export class PetkitPuramaxCard extends LitElement {
 
     this._config = { ...config, device_entities: deviceEntities };
     this._dayOffset = 0;
+    this._chartDayOffset = 0;
     this._analytics = null;
     this._chartVisits = [];
     this._chartEventHist = [];
@@ -409,10 +411,25 @@ export class PetkitPuramaxCard extends LitElement {
   // `_chartEventHist` are only reassigned once the fetch actually resolves
   // -- until then, `render()` keeps showing whatever they held before, so
   // paging through days quickly never flashes a placeholder frame.
+  //
+  // `_chartDayOffset` -- the offset the CURRENTLY HELD `_chartVisits` were
+  // actually fetched for -- is captured here and updated in lockstep with
+  // them, deliberately separate from `_dayOffset` itself (which the label/
+  // nav buttons key off and update immediately on click). REGRESSION
+  // (reported live): `_renderChartArea`'s x-axis scale used to be built from
+  // `dayBounds(this._dayOffset)` directly -- since that updates instantly on
+  // click but `_chartVisits` doesn't until the fetch resolves, the still-old
+  // day's visit timestamps got plotted against the NEW day's axis origin for
+  // one render, landing roughly a full day's width off (a visible left/right
+  // shift) until the fetch resolved and snapped everything back into place.
+  // `_renderChartArea` must key its scale off `_chartDayOffset`, never
+  // `_dayOffset` directly, so the axis and the dots plotted on it always
+  // describe the same day.
   async _loadDay() {
     if (!this._hass) return;
     const de = this._deviceEntities;
-    const { start, end } = dayBounds(this._dayOffset);
+    const requestedOffset = this._dayOffset;
+    const { start, end } = dayBounds(requestedOffset);
     let visits = [];
     let eventHist = [];
     try {
@@ -430,6 +447,7 @@ export class PetkitPuramaxCard extends LitElement {
     }
     this._chartVisits = visits;
     this._chartEventHist = eventHist;
+    this._chartDayOffset = requestedOffset;
     this._flush();
   }
 
@@ -732,7 +750,10 @@ export class PetkitPuramaxCard extends LitElement {
     const rawMaxDur = Math.max(60, ...visits.map((v) => v.duration));
     const yStep = niceStep(rawMaxDur);
     const niceMax = Math.ceil(rawMaxDur / yStep) * yStep;
-    const { start } = dayBounds(this._dayOffset);
+    // `_chartDayOffset`, NOT `_dayOffset` -- see the doc comment on
+    // `_loadDay()` for why: the axis origin must always match whichever
+    // day's data `visits` (from `_chartVisits`) actually is.
+    const { start } = dayBounds(this._chartDayOffset);
     const { xFor, yFor } = buildScales({ dayStart: start, niceMax, width, height, padding });
     const { vertical, horizontal } = buildGridLines({ niceMax, yStep, width, height, padding });
 

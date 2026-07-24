@@ -1722,6 +1722,72 @@ describe('PetkitPuramaxCard: no flicker while a day-switch fetch is in flight', 
     await flush();
     expect(card.shadowRoot.querySelector('.loading')).toBeNull();
   });
+
+  // REGRESSION (reported live): the chart's x-axis scale used to be built
+  // from `dayBounds(this._dayOffset)` directly. `_dayOffset` updates the
+  // instant a nav button is clicked, but `_chartVisits` (the actual plotted
+  // dots) only updates once the new day's fetch resolves -- so for one
+  // render, the STILL-OLD day's visit timestamps got plotted against the
+  // NEW day's axis origin, landing roughly a full day's width off (visible
+  // as the whole chart jumping left or right for a moment before snapping
+  // back once the fetch resolved). The fix keys the axis off a separate
+  // `_chartDayOffset` that only advances in lockstep with `_chartVisits`.
+  it('does not re-scale the still-old day\'s chart dots against the new day\'s axis while a day-switch fetch is in flight', async () => {
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+
+    const { start } = dayBounds(0);
+    const visitTs = Math.floor(start.getTime() / 1000) + 600; // 10 min after today's local midnight
+    const totalUsePoints = [
+      { s: '0', lu: Math.floor(start.getTime() / 1000) },
+      { s: '50', lu: visitTs },
+    ];
+    const hass = {
+      states: { 'sensor.test_petkit_error': { state: 'no_error' } },
+      callWS: vi.fn().mockImplementation((req) => {
+        if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+          return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+        }
+        return Promise.resolve({});
+      }),
+      callService: vi.fn(),
+    };
+    card.hass = hass;
+    await flush();
+
+    const dotBefore = card.shadowRoot.querySelector('.visit-point');
+    expect(dotBefore).not.toBeNull();
+    const cxBefore = dotBefore.getAttribute('cx');
+
+    // Switch to the previous day with a fetch that never resolves during
+    // this assertion window -- `_dayOffset` (and the day label) update
+    // immediately, but `_chartVisits` must not, so the dot stays exactly
+    // where it was rather than jumping to reflect the new (wrong) day.
+    // `_loadDay()` fires two concurrent `callWS` calls (total_use +
+    // last_event); each gets its own held-open promise, resolved together
+    // below (mirrors the sibling test above, just for two calls instead of one).
+    const pendingResolvers = [];
+    hass.callWS.mockImplementation(
+      (req) =>
+        new Promise((resolve) => {
+          pendingResolvers.push(() =>
+            resolve(req.entity_ids.includes('sensor.test_petkit_total_use') ? { 'sensor.test_petkit_total_use': [] } : {}),
+          );
+        }),
+    );
+    card.shadowRoot.getElementById('prev-day').dispatchEvent(new Event('click', { bubbles: true }));
+
+    expect(card.shadowRoot.getElementById('day-label').textContent).toBe('Yesterday');
+    const dotMidFetch = card.shadowRoot.querySelector('.visit-point');
+    expect(dotMidFetch.getAttribute('cx')).toBe(cxBefore);
+
+    pendingResolvers.forEach((resolve) => resolve());
+    await flush();
+    // Yesterday genuinely has no visits in this test -- the stale dot is
+    // gone once the new day's (empty) data actually arrives.
+    expect(card.shadowRoot.querySelector('.visit-point')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
