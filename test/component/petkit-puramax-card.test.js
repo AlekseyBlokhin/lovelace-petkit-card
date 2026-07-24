@@ -953,10 +953,15 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
   // sentence, replacing last_event's own real text -- but that's still not
   // what PETKIT actually reported. Working Records now shows last_event's
   // raw history completely verbatim: no computed re-phrasing, no pattern
-  // used to detect "is this a visit," no cross-reference to total_use at
-  // all. Duration is intentionally not shown here (it's in the chart
-  // tooltip/Usage line instead, which still use the total_use/last_used_by
-  // reconstruction independently).
+  // used to detect "is this a visit." Duration is intentionally not shown
+  // here (it's in the chart tooltip/Usage line instead, which still use the
+  // total_use/last_used_by reconstruction independently). The one narrow
+  // exception: `total_use`'s own visit timestamps (already fetched for the
+  // chart) are consulted as a binary "did a real visit independently happen
+  // here" check, purely to tell a flicker-repeat of the same text apart from
+  // two genuinely separate real visits sharing that text -- see
+  // `dedupeFlickerRepeats` and the two tests below. This never replaces a
+  // row's own text/content, unlike the reconciliation that caused #13/#14.
 
   it('shows a visit narration completely verbatim, with no duration and no re-phrasing', async () => {
     const cfg = baseConfig();
@@ -1073,13 +1078,54 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
     expect(usageText).toContain('Cat B: 0');
   });
 
-  it('shows two rows for the same repeated text with no dedupe of any kind, even across an unavailable gap', async () => {
+  it('collapses a same-text repeat across an unavailable gap when total_use confirms no second visit actually happened', async () => {
+    // The common case: last_event flickered to unavailable and recovered to
+    // the same narration text with no matching total_use increment near the
+    // second occurrence -- it's the SAME visit still being reported, not a
+    // new one, so it renders as a single row.
+    const cfg = baseConfig();
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const t0 = Math.floor(today9am.getTime() / 1000);
+    const lastEventHistory = [
+      { s: 'Cat A used the litter box', lu: t0 },
+      { s: 'unavailable', lu: t0 + 60 },
+      { s: 'Cat A used the litter box', lu: t0 + 120 },
+    ];
+    const totalUsePoints = [
+      { s: '0', lu: t0 - 60 },
+      { s: '43', lu: t0 }, // one real visit, matching only the FIRST occurrence
+    ];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
+      if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
+        return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
+      }
+      return Promise.resolve({});
+    });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    const texts = Array.from(rows).map((r) => r.querySelector('.record-text').textContent);
+    expect(texts.filter((t) => t === 'Cat A used the litter box').length).toBe(1);
+  });
+
+  it('shows two rows for the same repeated text across an unavailable gap when total_use independently confirms two real visits', async () => {
     // REGRESSION: a real captured case (2026-07-16) had two genuinely
     // separate "Cat A used the litter box" visits with an unavailable blip
     // in between and identical text on both sides -- a text-equality-based
-    // flicker-dedupe would have wrongly collapsed this into one row,
-    // silently dropping a real visit. Working Records applies no dedupe of
-    // any kind, so both real rows always show.
+    // flicker-dedupe alone would wrongly collapse this into one row,
+    // silently dropping a real visit. Working Records disambiguates using
+    // `total_use`'s own independent visit reconstruction (already fetched
+    // for the chart) purely as a binary "did a real visit happen here"
+    // check -- since total_use shows a real increment matching BOTH
+    // occurrences here, both rows are kept.
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
@@ -1091,8 +1137,16 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
       { s: 'unavailable', lu: t0 + 60 },
       { s: 'Cat A used the litter box', lu: t0 + 120 }, // a real, separate second visit
     ];
+    const totalUsePoints = [
+      { s: '0', lu: t0 - 60 },
+      { s: '48', lu: t0 }, // real visit #1
+      { s: '153', lu: t0 + 120 }, // real visit #2
+    ];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     hass.callWS = vi.fn().mockImplementation((req) => {
+      if (req.entity_ids.includes('sensor.test_petkit_total_use')) {
+        return Promise.resolve({ 'sensor.test_petkit_total_use': totalUsePoints });
+      }
       if (req.entity_ids.includes('sensor.test_petkit_last_event')) {
         return Promise.resolve({ 'sensor.test_petkit_last_event': lastEventHistory });
       }

@@ -2,7 +2,14 @@ import { LitElement, html, svg, nothing } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import { formatDuration, formatHoursAgo } from '../../lib/format.js';
 import { dayBounds, dayLabel, dayKey } from '../../lib/day.js';
-import { buildHistoryRequest, deltaEvents, catChangeEvents, attributeCats, rawStateAndTs, UNKNOWN_CAT_LABEL } from '../../lib/history.js';
+import {
+  buildHistoryRequest,
+  deltaEvents,
+  catChangeEvents,
+  attributeCats,
+  dedupeFlickerRepeats,
+  UNKNOWN_CAT_LABEL,
+} from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
 import { bucketByDay, summarize, detectAnomaly, detectNoVisitAlert, perCatMap } from '../../lib/analytics.js';
 import { computeChipDisplay } from '../../lib/chips.js';
@@ -839,33 +846,37 @@ export class PetkitPuramaxCard extends LitElement {
   // -- rendered as Home Assistant itself would show that value (via
   // `hass.formatEntityState`, which reads the PETKIT integration's own
   // `strings.json` enum translations), never a hand-maintained relabeling
-  // map and never interpreted through a pattern/regex. Every row PETKIT
-  // reports is shown, in arrival order; the only filtering is an explicit,
-  // configurable list of raw values to hide entirely (`event_exclude`) --
-  // no guessing at "is this a duplicate" or "is this a visit." There is
-  // also deliberately no cross-reference back to the total_use/
-  // last_used_by reconstruction that drives the chart/usage/analytics:
-  // merging two independently-computed views of "what happened" and
-  // reconciling them with dedupe logic is exactly what caused a string of
-  // real bugs before (see git history / issues #13, #14, #16) -- a single,
-  // unmodified stream has no reconciliation to get wrong.
+  // map and never interpreted through a pattern/regex. Every DISTINCT event
+  // PETKIT reports is shown, in arrival order; `event_exclude` hides an
+  // explicit, configurable list of raw values entirely, and doubles as the
+  // signal `dedupeFlickerRepeats` uses to collapse a value that flickers to
+  // a hidden state and recovers to itself back into its original row (see
+  // that function -- this sensor re-emits the identical value for as long
+  // as it remains the true last event, so a naive one-row-per-history-point
+  // view would show dozens of duplicate rows for a single real event).
+  // The ONLY cross-reference to the total_use/last_used_by reconstruction
+  // is `this._chartVisits`' own timestamps, passed through as
+  // `confirmedEventTimestamps` -- a narrow, binary "did an independently
+  // verified visit happen near here" signal used purely to tell a genuine
+  // flicker-repeat apart from two separate real visits that happen to share
+  // identical text (confirmed real case, 2026-07-16 -- see
+  // `dedupeFlickerRepeats`'s doc comment). This is NOT the full
+  // merge/re-synthesis (replacing last_event's own text, matching every row
+  // 1:1 against total_use) that caused real bugs before (see git history /
+  // issues #13, #14, #16); it never changes what a row says, only whether a
+  // same-text repeat right after a hidden state counts as new.
   _renderRecordsSection() {
     const cfg = this._config;
     const eventHist = this._chartEventHist || [];
     const lastEventEntity = this._deviceEntities.last_event;
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
-    const records = eventHist
-      .map((point) => {
-        const { state: val, ts } = rawStateAndTs(point) ?? {};
-        if (!val || !ts || excludeList.includes(val.toLowerCase())) return null;
-        return {
-          ts,
-          icon: 'mdi:information-outline',
-          color: 'var(--secondary-text-color)',
-          text: formatHistoricalState(this._hass, lastEventEntity, val),
-        };
-      })
-      .filter(Boolean);
+    const confirmedEventTimestamps = (this._chartVisits || []).map((v) => v.ts);
+    const records = dedupeFlickerRepeats(eventHist, excludeList, { confirmedEventTimestamps }).map(({ state, ts }) => ({
+      ts,
+      icon: 'mdi:information-outline',
+      color: 'var(--secondary-text-color)',
+      text: formatHistoricalState(this._hass, lastEventEntity, state),
+    }));
     records.sort((a, b) => b.ts - a.ts);
 
     return html`

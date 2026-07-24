@@ -52,16 +52,44 @@ an entity's current translation (so a PETKIT firmware event code like
 `manual_odor_failed_batt` renders using the integration's own `strings.json`
 translation, not a hand-maintained relabeling map — a raw value the
 integration doesn't translate is shown exactly as PETKIT reported it,
-untouched). The only filtering is `event_exclude` (an explicit, configurable
-list of raw values to hide entirely). There is no pattern-matching against
-the text to detect "is this a visit," no synthesized re-phrasing, and no
-cross-reference back to the
-`total_use`/`last_used_by` reconstruction above — merging two
-independently-computed views of "what happened" and reconciling them with
-dedupe logic is exactly what caused a string of real bugs in earlier
-versions of this card (duplicate rows, phantom rows, a real visit silently
-collapsed by a dedupe heuristic that couldn't tell it apart from a
-connectivity-blip artifact). A single, unmodified stream has none of that
-to get wrong — trade-off accepted: a Working Records visit row has no
-duration (still visible via the chart tooltip and the Usage line, which use
-the `total_use` reconstruction instead).
+untouched). There is no pattern-matching against the text to detect "is
+this a visit" and no synthesized re-phrasing — a row's TEXT never comes
+from anything but its own raw `last_event` value. A single stream deduped
+only against its own flicker noise has none of the cross-source
+reconciliation that caused a string of real bugs in earlier versions of
+this card (fully replacing a row's text with a computed sentence, matching
+every row 1:1 against `total_use`) — trade-off accepted: a Working Records
+visit row has no duration (still visible via the chart tooltip and the
+Usage line, which use the `total_use` reconstruction instead).
+
+Two things filter/collapse the raw `last_event` stream:
+
+- **`event_exclude`** (an explicit, configurable list of raw values,
+  default `["unavailable", "unknown", "no_events_yet"]`) hides those raw
+  values entirely.
+- **`dedupeFlickerRepeats`** (`src/lib/history.js`) collapses a value that
+  reappears immediately after one of the `event_exclude` states back into
+  its original row. This sensor flickers to a hidden state (typically
+  `unavailable`) roughly every 30s–2min and republishes the identical event
+  text for as long as it remains the true last event — a real captured run
+  repeated the same value 43 times over ~2 hours for one visit. Without
+  this, every republish renders as its own duplicate row. The merge only
+  fires when the point *immediately preceding* the repeat (in raw arrival
+  order) was itself a hidden state.
+
+  That alone isn't quite safe: real captured data (2026-07-16) shows two
+  GENUINELY separate real visits by the same cat, 5.5 minutes apart, sharing
+  identical text with an unrelated hidden-state blip between them — no
+  time-gap threshold can tell this apart from a true flicker chain, since
+  those span anywhere from seconds to hours in real data. `_renderRecordsSection`
+  passes `this._chartVisits`' own timestamps in as
+  `confirmedEventTimestamps` — the same `total_use`-derived visit
+  reconstruction already computed for the chart, reused here purely as a
+  narrow, binary "did an independently verified visit happen near each
+  side of this repeat" check. A merge candidate only actually merges when
+  *neither* side has its own nearby confirmed timestamp (which is true for
+  ordinary device-status flicker, since `total_use` only tracks litter-box
+  visits); if *both* sides are independently confirmed, they're kept as two
+  rows. This is deliberately narrower than the reconciliation approach that
+  caused the earlier bugs above: it never touches a row's text or duration,
+  and it only ever affects the flicker-recovery merge decision.

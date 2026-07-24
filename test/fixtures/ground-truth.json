@@ -105,20 +105,12 @@
         "text": "Manual cleaning canceled, device in operation"
       },
       {
-        "ts": 1784061522.270801,
-        "text": "Cat B used the litter box"
-      },
-      {
         "ts": 1784056444.2343,
         "text": "Cat B used the litter box"
       },
       {
-        "ts": 1784050578.202357,
+        "ts": 1784050578.2023568,
         "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1784050278.217472,
-        "text": "Manual odor removal completed"
       },
       {
         "ts": 1784023000.206403,
@@ -157,22 +149,6 @@
         "text": "Cat B used the litter box"
       },
       {
-        "ts": 1784015378.349192,
-        "text": "Auto cleaning completed"
-      },
-      {
-        "ts": 1784011530.343577,
-        "text": "Auto cleaning completed"
-      },
-      {
-        "ts": 1784010870.313114,
-        "text": "Auto cleaning completed"
-      },
-      {
-        "ts": 1784006318.25684,
-        "text": "Auto cleaning completed"
-      },
-      {
         "ts": 1784005386.283838,
         "text": "Auto cleaning completed"
       },
@@ -189,18 +165,6 @@
         "text": "Cat A used the litter box"
       },
       {
-        "ts": 1784002120.274891,
-        "text": "Maintenance mode"
-      },
-      {
-        "ts": 1784000621.262671,
-        "text": "Maintenance mode"
-      },
-      {
-        "ts": 1784000019.30118,
-        "text": "Maintenance mode"
-      },
-      {
         "ts": 1783999709.202294,
         "text": "Maintenance mode"
       },
@@ -209,32 +173,8 @@
         "text": "Manual odor removal completed"
       },
       {
-        "ts": 1783999635.944061,
-        "text": "Cat B used the litter box"
-      },
-      {
-        "ts": 1783999285.488651,
-        "text": "Cat B used the litter box"
-      },
-      {
         "ts": 1783997062.285805,
         "text": "Cat B used the litter box"
-      },
-      {
-        "ts": 1783994166.267851,
-        "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1783992663.266224,
-        "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1783992300.255608,
-        "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1783991879.31576,
-        "text": "Cat A used the litter box"
       },
       {
         "ts": 1783980136.215256,
@@ -351,10 +291,6 @@
         "text": "Manual odor removal completed"
       },
       {
-        "ts": 1784137131.274394,
-        "text": "Cat B used the litter box"
-      },
-      {
         "ts": 1784135989.234264,
         "text": "Cat B used the litter box"
       },
@@ -395,10 +331,6 @@
         "text": "Auto cleaning completed"
       },
       {
-        "ts": 1784086404.23723,
-        "text": "Maintenance mode"
-      },
-      {
         "ts": 1784085222.160016,
         "text": "Maintenance mode"
       },
@@ -423,10 +355,6 @@
         "text": "Cat A used the litter box"
       },
       {
-        "ts": 1784075117.262399,
-        "text": "Maintenance mode"
-      },
-      {
         "ts": 1784069822.164339,
         "text": "Maintenance mode"
       },
@@ -437,14 +365,6 @@
       {
         "ts": 1784069681.204505,
         "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1784069350.29916,
-        "text": "Auto cleaning completed"
-      },
-      {
-        "ts": 1784068389.238385,
-        "text": "Auto cleaning completed"
       },
       {
         "ts": 1784066759.21277,
@@ -570,14 +490,6 @@
     },
     "working_records": [
       {
-        "ts": 1784237482.23109,
-        "text": "Cat B used the litter box"
-      },
-      {
-        "ts": 1784234932.241814,
-        "text": "Cat B used the litter box"
-      },
-      {
         "ts": 1784233701.217584,
         "text": "Cat B used the litter box"
       },
@@ -598,10 +510,6 @@
         "text": "Cat A used the litter box"
       },
       {
-        "ts": 1784217730.138804,
-        "text": "Unknown used the litter box"
-      },
-      {
         "ts": 1784203532.223673,
         "text": "Unknown used the litter box"
       },
@@ -618,7 +526,7 @@
         "text": "Manual odor removal completed"
       },
       {
-        "ts": 1784198545.225998,
+        "ts": 1784198545.2259982,
         "text": "Cat A used the litter box"
       },
       {
@@ -650,14 +558,6 @@
         "text": "Cat A used the litter box"
       },
       {
-        "ts": 1784189349.222284,
-        "text": "Auto cleaning completed"
-      },
-      {
-        "ts": 1784182411.240085,
-        "text": "Auto cleaning completed"
-      },
-      {
         "ts": 1784178192.228584,
         "text": "Auto cleaning completed"
       },
@@ -668,18 +568,6 @@
       {
         "ts": 1784175322.274387,
         "text": "Unknown used the litter box"
-      },
-      {
-        "ts": 1784174932.24307,
-        "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1784174521.41928,
-        "text": "Cat A used the litter box"
-      },
-      {
-        "ts": 1784172862.243485,
-        "text": "Cat A used the litter box"
       },
       {
         "ts": 1784171902.253726,

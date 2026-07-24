@@ -7,6 +7,7 @@ import {
   deltaEvents,
   catChangeEvents,
   attributeCats,
+  dedupeFlickerRepeats,
   UNKNOWN_CAT_STATE,
   UNKNOWN_CAT_LABEL,
 } from '../../src/lib/history.js';
@@ -606,6 +607,187 @@ describe('attributeCats', () => {
       const result = attributeCats(durationEvents, catEvents);
       expect(result[0].cat).toBeNull();
       expect(result[1].cat).toBe('Cat A');
+    });
+  });
+});
+
+describe('dedupeFlickerRepeats', () => {
+  const HIDDEN = ['unavailable', 'unknown', 'no_events_yet'];
+
+  it('collapses a value that flickers to a hidden state and recovers to itself, keeping the first occurrence', () => {
+    const hist = [
+      { s: 'Cat A used the litter box', lu: 1000 },
+      { s: 'unavailable', lu: 1010 },
+      { s: 'Cat A used the litter box', lu: 1020 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
+  });
+
+  it('does NOT merge two genuinely separate real events with identical text and nothing hidden between them', () => {
+    const hist = [
+      { s: 'auto_cleaning_completed', lu: 1000 },
+      { s: 'auto_cleaning_completed', lu: 2000 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([
+      { state: 'auto_cleaning_completed', ts: 1000000 },
+      { state: 'auto_cleaning_completed', ts: 2000000 },
+    ]);
+  });
+
+  it('does not merge a repeat that is preceded by a genuinely different real value rather than a hidden one', () => {
+    const hist = [
+      { s: 'Cat A used the litter box', lu: 1000 },
+      { s: 'manual_odor_completed', lu: 1500 },
+      { s: 'Cat A used the litter box', lu: 2000 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000000 },
+      { state: 'manual_odor_completed', ts: 1500000 },
+      { state: 'Cat A used the litter box', ts: 2000000 },
+    ]);
+  });
+
+  it('drops hidden states from the output entirely', () => {
+    const hist = [
+      { s: 'unavailable', lu: 1000 },
+      { s: 'Cat A used the litter box', lu: 2000 },
+      { s: 'unknown', lu: 2500 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat A used the litter box', ts: 2000000 }]);
+  });
+
+  it('sorts input by timestamp regardless of arrival order before deduping', () => {
+    const hist = [
+      { s: 'Cat A used the litter box', lu: 2000 },
+      { s: 'unavailable', lu: 1500 },
+      { s: 'Cat A used the litter box', lu: 1000 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
+  });
+
+  it('returns an empty array for missing/non-array input', () => {
+    expect(dedupeFlickerRepeats(undefined, HIDDEN)).toEqual([]);
+    expect(dedupeFlickerRepeats([], HIDDEN)).toEqual([]);
+  });
+
+  // --------------------------------------------------------------------
+  // REGRESSION (reported live 2026-07-24): Working Records showed dozens of
+  // duplicate rows for a single real visit. `sensor.petkit_puramax_last_event`
+  // flickers to `unavailable` roughly every 30s-2min and republishes the
+  // identical event text for as long as it remains the true last event; a
+  // real captured sequence repeated the same value 43 times over ~2 hours
+  // for one visit. This dedup existed before (added after an earlier
+  // live-confirmed duplicate-row bug) but was dropped when Working Records
+  // was reworked to render `last_event` verbatim, and never carried
+  // forward. Fixture below is a trimmed real captured sequence (cat names
+  // replaced with placeholders); real timestamps in epoch seconds.
+  // --------------------------------------------------------------------
+  it('REGRESSION: collapses a real multi-hour flicker run into a single row', () => {
+    const hist = [
+      { s: 'Cat B used the litter box', lu: 1753304168 },
+      { s: 'unavailable', lu: 1753305115 },
+      { s: 'Cat B used the litter box', lu: 1753305345 },
+      { s: 'unavailable', lu: 1753305701 },
+      { s: 'Cat B used the litter box', lu: 1753305732 },
+      { s: 'unavailable', lu: 1753306045 },
+      { s: 'Cat B used the litter box', lu: 1753306183 },
+      { s: 'unavailable', lu: 1753306297 },
+      { s: 'Cat B used the litter box', lu: 1753306338 },
+      { s: 'unavailable', lu: 1753306408 },
+      { s: 'Cat B used the litter box', lu: 1753306438 },
+    ];
+    expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat B used the litter box', ts: 1753304168000 }]);
+  });
+
+  describe('confirmedEventTimestamps (disambiguating a flicker-repeat from two real identical-text visits)', () => {
+    it('still merges an ordinary flicker-repeat when no confirmed timestamps are supplied at all (default text-only rule)', () => {
+      const hist = [
+        { s: 'Cat A used the litter box', lu: 1000 },
+        { s: 'unavailable', lu: 1010 },
+        { s: 'Cat A used the litter box', lu: 1020 },
+      ];
+      expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
+    });
+
+    it('still merges when confirmed timestamps exist but land near neither side of the repeat (e.g. a device-status flicker total_use knows nothing about)', () => {
+      const hist = [
+        { s: 'maintenance_mode', lu: 1000 },
+        { s: 'unavailable', lu: 1010 },
+        { s: 'maintenance_mode', lu: 1020 },
+      ];
+      expect(
+        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [500000] }),
+      ).toEqual([{ state: 'maintenance_mode', ts: 1000000 }]);
+    });
+
+    it('does NOT merge when BOTH sides of the repeat land near their own confirmed timestamp -- two real visits, not one', () => {
+      const hist = [
+        { s: 'Cat A used the litter box', lu: 1000 },
+        { s: 'unavailable', lu: 1010 },
+        { s: 'Cat A used the litter box', lu: 1020 },
+      ];
+      expect(
+        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [1000000, 1020000] }),
+      ).toEqual([
+        { state: 'Cat A used the litter box', ts: 1000000 },
+        { state: 'Cat A used the litter box', ts: 1020000 },
+      ]);
+    });
+
+    it('still merges when only ONE side has a nearby confirmed timestamp', () => {
+      const hist = [
+        { s: 'Cat A used the litter box', lu: 1000 },
+        { s: 'unavailable', lu: 1010 },
+        { s: 'Cat A used the litter box', lu: 1020 },
+      ];
+      expect(
+        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [1000000] }),
+      ).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
+    });
+
+    it('honors a custom confirmToleranceMs instead of the 10s default', () => {
+      const hist = [
+        { s: 'Cat A used the litter box', lu: 1000 },
+        { s: 'unavailable', lu: 1010 },
+        { s: 'Cat A used the litter box', lu: 1020 },
+      ];
+      // Both confirmed timestamps sit 8s from their respective occurrence
+      // (1000000/1020000): within the 10s default tolerance (confirmed, no
+      // merge) but outside a tightened 5s tolerance (unconfirmed, merges).
+      const confirmedEventTimestamps = [992000, 1028000];
+      expect(dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps })).toEqual([
+        { state: 'Cat A used the litter box', ts: 1000000 },
+        { state: 'Cat A used the litter box', ts: 1020000 },
+      ]);
+      expect(
+        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps, confirmToleranceMs: 5000 }),
+      ).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
+    });
+
+    // ------------------------------------------------------------------
+    // REGRESSION (real captured case, 2026-07-16): two genuinely separate
+    // real visits by Cat A, 5.5 minutes apart, sharing identical narration
+    // text with an unrelated `unavailable` blip between them. Confirmed via
+    // this device's own `total_use` counter, which independently recorded a
+    // real increment within ~1s of EACH occurrence (48 and 153, respectively)
+    // -- proof these are two real visits, not one flickering value. A prior
+    // version of this card's test suite asserted this exact case must never
+    // be collapsed; the current text-only rule alone would wrongly merge it
+    // (see the sibling REGRESSION test above for the opposite, far more
+    // common case this dedup exists to fix). Real timestamps in epoch
+    // seconds.
+    // ------------------------------------------------------------------
+    it('REGRESSION: keeps two real same-text visits separated only by an unrelated unavailable blip', () => {
+      const hist = [
+        { s: 'Cat A used the litter box', lu: 1784171571.292725 },
+        { s: 'unavailable', lu: 1784171872.012611 },
+        { s: 'Cat A used the litter box', lu: 1784171902.253726 },
+      ];
+      const confirmedEventTimestamps = [1784171571291.657, 1784171902252.968]; // total_use delta timestamps (ms)
+      expect(dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps })).toEqual([
+        { state: 'Cat A used the litter box', ts: 1784171571292.725 },
+        { state: 'Cat A used the litter box', ts: 1784171902253.726 },
+      ]);
     });
   });
 });

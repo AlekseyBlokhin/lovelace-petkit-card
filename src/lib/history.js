@@ -155,6 +155,93 @@ export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinit
 }
 
 /**
+ * Reduces a "last event" sensor's raw history into the events actually
+ * worth showing, matching the sensor's own semantics: it holds whatever
+ * event most recently happened, so two consecutive appearances of the
+ * identical text are the SAME underlying event still being reported, not a
+ * second occurrence of it -- unless something else genuinely happened in
+ * between.
+ *
+ * `hiddenStates` (matched case-insensitively) marks placeholder/noise
+ * states -- e.g. `unavailable`, or a caller's own exclude list -- that are
+ * dropped from the output entirely AND are the ONLY thing allowed to
+ * trigger a merge: a repeat is only ever a MERGE CANDIDATE when the point
+ * immediately before it (in raw arrival order, before any filtering) was
+ * one of these hidden states -- i.e. exactly the "flickered to a hidden
+ * state and recovered to the same value" signature.
+ *
+ * A merge candidate is not automatically merged, though: real captured data
+ * (2026-07-16) shows a genuine case of two SEPARATE real visits by the same
+ * cat, 5.5 minutes apart, sharing identical narration text with an
+ * unrelated `unavailable` blip between them -- indistinguishable from a
+ * true flicker-repeat using this sensor's own text/timing alone (true
+ * flicker chains span anywhere from seconds to hours, so no time-gap
+ * threshold can separate the two cases). `options.confirmedEventTimestamps`
+ * -- typically the SAME day's `total_use`-derived visit timestamps the
+ * caller already has on hand for the chart, e.g. `deltaEvents(...)` output
+ * -- resolves the ambiguity: a merge candidate is only actually merged when
+ * NEITHER side has its own independent confirmed-event timestamp nearby (a
+ * device-status flicker like `maintenance_mode`, which total_use knows
+ * nothing about, always merges normally); if BOTH the earlier and later
+ * occurrence land near their own confirmed timestamp, they're kept as two
+ * separate rows. This is a narrow, binary "did something independently
+ * verifiable happen here" check, not the kind of full merge/re-synthesis
+ * (replacing last_event's own text with a computed sentence, matching every
+ * row 1:1 against total_use) that caused real bugs before (issues #13, #14,
+ * #16) -- omitting `confirmedEventTimestamps` falls back to the simpler
+ * text-only rule.
+ *
+ * REGRESSION: this exact dedup existed before (added after a live-confirmed
+ * duplicate-row bug, refined twice more to fix a tracking edge case where a
+ * value suppressed by an unrelated rule left the flicker-tracker stale) but
+ * was dropped when Working Records was reworked to render `last_event`
+ * verbatim, and never carried forward. Confirmed live 2026-07-24: this
+ * sensor flickers to `unavailable` every ~30s-2min and republishes the
+ * identical event text for as long as it remains the true last event -- one
+ * observed run repeated 43 times over ~2 hours for what was really one
+ * visit. See `history.test.js` for the real captured sequences (both the
+ * flicker-repeat case and the genuinely-separate-visits case).
+ *
+ * @param {Array<object>} historyForEntity
+ * @param {string[]} hiddenStates - raw state values to drop from the output
+ *   and treat as transparent flicker noise (matched case-insensitively).
+ * @param {{ confirmedEventTimestamps?: number[], confirmToleranceMs?: number }} [options]
+ * @returns {Array<{ state: string, ts: number }>} ascending by ts, one
+ *   entry per real event.
+ */
+export function dedupeFlickerRepeats(historyForEntity, hiddenStates, options = {}) {
+  if (!Array.isArray(historyForEntity)) return [];
+  const hiddenSet = new Set(hiddenStates.map((s) => String(s).toLowerCase()));
+  const { confirmedEventTimestamps = [], confirmToleranceMs = 10000 } = options;
+  const hasConfirmedEventNear = (ts) => confirmedEventTimestamps.some((c) => Math.abs(c - ts) <= confirmToleranceMs);
+
+  const points = historyForEntity
+    .map(rawStateAndTs)
+    .filter((p) => p && p.state != null && p.ts != null && !Number.isNaN(p.ts))
+    .sort((a, b) => a.ts - b.ts);
+
+  const events = [];
+  let lastKeptState = null;
+  let lastKeptTs = null;
+  let prevWasHidden = false;
+  for (const { state, ts } of points) {
+    if (hiddenSet.has(String(state).toLowerCase())) {
+      prevWasHidden = true;
+      continue;
+    }
+    const isMergeCandidate = prevWasHidden && state === lastKeptState;
+    const bothIndependentlyConfirmed = isMergeCandidate && hasConfirmedEventNear(lastKeptTs) && hasConfirmedEventNear(ts);
+    const isFlickerRecovery = isMergeCandidate && !bothIndependentlyConfirmed;
+    prevWasHidden = false;
+    if (isFlickerRecovery) continue;
+    lastKeptState = state;
+    lastKeptTs = ts;
+    events.push({ state, ts });
+  }
+  return events;
+}
+
+/**
  * PetKit PURAMAX firmware's own placeholder identity value on `last_used_by`
  * for a visit whose cat it couldn't recognize (as opposed to `unavailable`/
  * `no_record_yet`, which mean "no assertion at all", not "asserting
