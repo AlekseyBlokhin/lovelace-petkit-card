@@ -147,7 +147,17 @@ var U2=Object.defineProperty;var G2=(M,C,H)=>C in M?U2(M,C,{enumerable:!0,config
   .stat-value { font-size: 1em; font-weight: 600; color: var(--primary-text-color); }
   .usage-cats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.85em; color: var(--secondary-text-color); justify-content: flex-end; }
   .usage-cat { display: flex; align-items: center; gap: 4px; }
-  .records-list { display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
+  /* A scrollable sub-list clipped by max-height/overflow-y hard-cuts a
+     partial row at the top/bottom edge when scrolled to a middle position
+     -- with no scrollbar visible on most platforms (mobile Companion app
+     included), that reads as a rendering glitch rather than "this list
+     scrolls." The mask fades content out over the last 12px of each edge
+     instead of a hard clip, the standard signal for "there's more here." */
+  .records-list {
+    display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto;
+    mask-image: linear-gradient(to bottom, transparent, black 12px, black calc(100% - 12px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 12px, black calc(100% - 12px), transparent);
+  }
   .record-row { display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--primary-text-color); }
   .record-time { color: var(--secondary-text-color); min-width: 46px; }
   .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--pk-space-lg); }
