@@ -1384,6 +1384,76 @@ describe('PetkitPuramaxCard: Working Records reconciled against total_use, never
   });
 });
 
+describe('PetkitPuramaxCard: Working Records rows for a configured cat get that cat\'s icon/color', () => {
+  // A visit row's text always contains the matching configured cat's name
+  // (see visitNarrationText/reconcileVisitRecords), so matching it against
+  // cfg.cats is enough to tell a visit row apart from a device-status row --
+  // no need to thread cat identity through reconcileVisitRecords separately.
+
+  it('uses mdi:cat and the cat\'s configured color for a matched visit row', async () => {
+    const cfg = baseConfig({ cats: [{ name: 'Cat A', color: '#111111' }] });
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [{ s: 'Cat A used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    const icon = rows[0].querySelector('ha-icon');
+    expect(icon.getAttribute('icon')).toBe('mdi:cat');
+    expect(icon.getAttribute('style')).toContain('#111111');
+  });
+
+  it('leaves a device-status row (no configured cat name in the text) on the default icon/color', async () => {
+    const cfg = baseConfig({ cats: [{ name: 'Cat A', color: '#111111' }] });
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [{ s: 'auto_cleaning_completed', lu: Math.floor(today9am.getTime() / 1000) }];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    const icon = rows[0].querySelector('ha-icon');
+    expect(icon.getAttribute('icon')).toBe('mdi:information-outline');
+    expect(icon.getAttribute('style')).toContain('var(--secondary-text-color)');
+  });
+
+  it('matches the right cat among several configured cats', async () => {
+    const cfg = baseConfig({
+      device_entities: { ...baseConfig().device_entities, last_used_by: 'sensor.test_petkit_last_used_by' },
+      cats: [
+        { name: 'Cat A', color: '#111111' },
+        { name: 'Cat B', color: '#222222' },
+      ],
+    });
+    const card = makeCard();
+    card.setConfig(cfg);
+    const today9am = new Date();
+    today9am.setHours(9, 0, 0, 0);
+    const lastEventHistory = [{ s: 'Cat B used the litter box', lu: Math.floor(today9am.getTime() / 1000) }];
+    const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    hass.callWS = vi.fn().mockResolvedValue({ 'sensor.test_petkit_last_event': lastEventHistory });
+    card.hass = hass;
+    await flush();
+
+    const rows = card.shadowRoot.querySelectorAll('.record-row');
+    expect(rows.length).toBe(1);
+    const icon = rows[0].querySelector('ha-icon');
+    expect(icon.getAttribute('icon')).toBe('mdi:cat');
+    expect(icon.getAttribute('style')).toContain('#222222');
+  });
+});
+
 describe('PetkitPuramaxCard: no-visit alert', () => {
   afterEach(() => {
     vi.useRealTimers();

@@ -167,14 +167,36 @@ export const CARD_STYLES = css`
      -- with no scrollbar visible on most platforms (mobile Companion app
      included), that reads as a rendering glitch rather than "this list
      scrolls." The mask fades content out over the last 12px of each edge
-     instead of a hard clip, the standard signal for "there's more here." */
+     instead of a hard clip, the standard signal for "there's more here."
+     The fade itself is conditional on actual scroll position (.fade-top/
+     .fade-bottom, toggled by _updateRecordsFade() from @scroll +
+     updated()) -- a permanent two-edge mask faded the very first row even
+     at scrollTop 0 with nothing above it, which reads as "this list is
+     already scrolled" rather than "this list scrolls." */
   .records-list {
     display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto;
+  }
+  .records-list.fade-top {
+    mask-image: linear-gradient(to bottom, transparent, black 12px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 12px);
+  }
+  .records-list.fade-bottom {
+    mask-image: linear-gradient(to bottom, black calc(100% - 12px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 12px), transparent);
+  }
+  .records-list.fade-top.fade-bottom {
     mask-image: linear-gradient(to bottom, transparent, black 12px, black calc(100% - 12px), transparent);
     -webkit-mask-image: linear-gradient(to bottom, transparent, black 12px, black calc(100% - 12px), transparent);
   }
-  .record-row { display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--primary-text-color); }
-  .record-time { color: var(--secondary-text-color); min-width: 46px; }
+  /* align-items: flex-start (not center) + nowrap/flex-shrink:0 on
+     .record-time -- a long .record-text wraps to 2 lines, and without these
+     two, .record-time got squeezed below its own ~50px natural width by the
+     flex layout and wrapped "08:33 AM" onto its own second line too, at
+     which point center-alignment put the icon at the row's vertical
+     midpoint (between the two text lines) instead of level with the first
+     line, looking misaligned next to every neighboring single-line row. */
+  .record-row { display: flex; align-items: flex-start; gap: 8px; font-size: 0.85em; color: var(--primary-text-color); }
+  .record-time { color: var(--secondary-text-color); min-width: 46px; white-space: nowrap; flex-shrink: 0; }
   .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--pk-space-lg); }
   /* table-layout: fixed + explicit .col-name/.col-stat widths (below) is
      what actually keeps every cat's columns aligned. table-layout's default

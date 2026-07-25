@@ -286,6 +286,27 @@ export class PetkitPuramaxCard extends LitElement {
     }
   }
 
+  // Re-derives the Working Records scroll-fade classes after every render --
+  // cheap (two DOM reads, two classList writes) and it must re-run whenever
+  // the record count/day changes, not just on scroll, since a re-render can
+  // change scrollHeight out from under the list (e.g. switching to a day
+  // with fewer records that no longer overflows at all).
+  updated(changedProps) {
+    super.updated(changedProps);
+    this._updateRecordsFade();
+  }
+
+  // Imperative (not reactive state) on purpose, same reasoning as the chart
+  // tooltip below: this is a transient scroll-position indicator, not data
+  // that needs to survive/trigger a re-render.
+  _updateRecordsFade() {
+    const list = this.shadowRoot.querySelector('.records-list');
+    if (!list) return;
+    const canScroll = list.scrollHeight > list.clientHeight + 1;
+    list.classList.toggle('fade-top', canScroll && list.scrollTop > 0);
+    list.classList.toggle('fade-bottom', canScroll && list.scrollTop < list.scrollHeight - list.clientHeight - 1);
+  }
+
   // The "no visit in N hours" alert must keep advancing purely from time
   // passing, not just when a new visit re-triggers `_loadAnalytics()` --
   // otherwise a cat that's overdue would only get flagged the next time
@@ -921,18 +942,27 @@ export class PetkitPuramaxCard extends LitElement {
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
     const confirmedVisits = this._visits().map((v) => ({ cat: v.cat.name, ts: v.ts }));
     const dedupedEvents = dedupeFlickerRepeats(eventHist, excludeList);
-    const records = reconcileVisitRecords(dedupedEvents, confirmedVisits).map(({ state, ts }) => ({
-      ts,
-      icon: 'mdi:information-outline',
-      color: 'var(--secondary-text-color)',
-      text: formatHistoricalState(this._hass, lastEventEntity, state),
-    }));
+    const records = reconcileVisitRecords(dedupedEvents, confirmedVisits).map(({ state, ts }) => {
+      const text = formatHistoricalState(this._hass, lastEventEntity, state);
+      // A visit row's text is always `visitNarrationText(cat.name)` (see
+      // reconcileVisitRecords), so matching a configured cat's name against
+      // the already-rendered line is enough to tell a visit row apart from
+      // a device-status row (maintenance/cleaning/odor/errors) without
+      // threading cat identity through reconcileVisitRecords separately.
+      const cat = (cfg.cats || []).find((c) => text.includes(c.name));
+      return {
+        ts,
+        icon: cat ? 'mdi:cat' : 'mdi:information-outline',
+        color: cat ? resolveCssColor(cat.color) : 'var(--secondary-text-color)',
+        text,
+      };
+    });
     records.sort((a, b) => b.ts - a.ts);
 
     return html`
       <div class="records-section">
         <div class="section-title">Working Records</div>
-        <div class="records-list" id="records-list">
+        <div class="records-list" id="records-list" @scroll=${() => this._updateRecordsFade()}>
           ${records.length === 0
             ? html`<div class="empty-note">No records for this day</div>`
             : records.map(
