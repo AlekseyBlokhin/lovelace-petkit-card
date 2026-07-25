@@ -8,7 +8,8 @@ import {
   catChangeEvents,
   attributeCats,
   dedupeFlickerRepeats,
-  expandConfirmedRepeats,
+  visitNarrationText,
+  reconcileVisitRecords,
   UNKNOWN_CAT_STATE,
   UNKNOWN_CAT_LABEL,
 } from '../../src/lib/history.js';
@@ -699,199 +700,170 @@ describe('dedupeFlickerRepeats', () => {
     ];
     expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat B used the litter box', ts: 1753304168000 }]);
   });
+});
 
-  describe('confirmedEventTimestamps (disambiguating a flicker-repeat from two real identical-text visits)', () => {
-    it('still merges an ordinary flicker-repeat when no confirmed timestamps are supplied at all (default text-only rule)', () => {
-      const hist = [
-        { s: 'Cat A used the litter box', lu: 1000 },
-        { s: 'unavailable', lu: 1010 },
-        { s: 'Cat A used the litter box', lu: 1020 },
-      ];
-      expect(dedupeFlickerRepeats(hist, HIDDEN)).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
-    });
+describe('visitNarrationText', () => {
+  it('formats the exact phrase PETKIT uses for a real visit', () => {
+    expect(visitNarrationText('Cat A')).toBe('Cat A used the litter box');
+  });
 
-    it('still merges when confirmed timestamps exist but land near neither side of the repeat (e.g. a device-status flicker total_use knows nothing about)', () => {
-      const hist = [
-        { s: 'maintenance_mode', lu: 1000 },
-        { s: 'unavailable', lu: 1010 },
-        { s: 'maintenance_mode', lu: 1020 },
-      ];
-      expect(
-        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [500000] }),
-      ).toEqual([{ state: 'maintenance_mode', ts: 1000000 }]);
-    });
-
-    it('does NOT merge when BOTH sides of the repeat land near their own confirmed timestamp -- two real visits, not one', () => {
-      const hist = [
-        { s: 'Cat A used the litter box', lu: 1000 },
-        { s: 'unavailable', lu: 1010 },
-        { s: 'Cat A used the litter box', lu: 1020 },
-      ];
-      expect(
-        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [1000000, 1020000] }),
-      ).toEqual([
-        { state: 'Cat A used the litter box', ts: 1000000 },
-        { state: 'Cat A used the litter box', ts: 1020000 },
-      ]);
-    });
-
-    it('still merges when only ONE side has a nearby confirmed timestamp', () => {
-      const hist = [
-        { s: 'Cat A used the litter box', lu: 1000 },
-        { s: 'unavailable', lu: 1010 },
-        { s: 'Cat A used the litter box', lu: 1020 },
-      ];
-      expect(
-        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps: [1000000] }),
-      ).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
-    });
-
-    it('honors a custom confirmToleranceMs instead of the 10s default', () => {
-      const hist = [
-        { s: 'Cat A used the litter box', lu: 1000 },
-        { s: 'unavailable', lu: 1010 },
-        { s: 'Cat A used the litter box', lu: 1020 },
-      ];
-      // Both confirmed timestamps sit 8s from their respective occurrence
-      // (1000000/1020000): within the 10s default tolerance (confirmed, no
-      // merge) but outside a tightened 5s tolerance (unconfirmed, merges).
-      const confirmedEventTimestamps = [992000, 1028000];
-      expect(dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps })).toEqual([
-        { state: 'Cat A used the litter box', ts: 1000000 },
-        { state: 'Cat A used the litter box', ts: 1020000 },
-      ]);
-      expect(
-        dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps, confirmToleranceMs: 5000 }),
-      ).toEqual([{ state: 'Cat A used the litter box', ts: 1000000 }]);
-    });
-
-    // ------------------------------------------------------------------
-    // REGRESSION (real captured case, 2026-07-16): two genuinely separate
-    // real visits by Cat A, 5.5 minutes apart, sharing identical narration
-    // text with an unrelated `unavailable` blip between them. Confirmed via
-    // this device's own `total_use` counter, which independently recorded a
-    // real increment within ~1s of EACH occurrence (48 and 153, respectively)
-    // -- proof these are two real visits, not one flickering value. A prior
-    // version of this card's test suite asserted this exact case must never
-    // be collapsed; the current text-only rule alone would wrongly merge it
-    // (see the sibling REGRESSION test above for the opposite, far more
-    // common case this dedup exists to fix). Real timestamps in epoch
-    // seconds.
-    // ------------------------------------------------------------------
-    it('REGRESSION: keeps two real same-text visits separated only by an unrelated unavailable blip', () => {
-      const hist = [
-        { s: 'Cat A used the litter box', lu: 1784171571.292725 },
-        { s: 'unavailable', lu: 1784171872.012611 },
-        { s: 'Cat A used the litter box', lu: 1784171902.253726 },
-      ];
-      const confirmedEventTimestamps = [1784171571291.657, 1784171902252.968]; // total_use delta timestamps (ms)
-      expect(dedupeFlickerRepeats(hist, HIDDEN, { confirmedEventTimestamps })).toEqual([
-        { state: 'Cat A used the litter box', ts: 1784171571292.725 },
-        { state: 'Cat A used the litter box', ts: 1784171902253.726 },
-      ]);
-    });
+  it('formats the exact phrase PETKIT uses for an unidentified visit', () => {
+    expect(visitNarrationText(UNKNOWN_CAT_LABEL)).toBe('Unknown used the litter box');
   });
 });
 
-describe('expandConfirmedRepeats', () => {
-  it('returns the input unchanged when there are no confirmed timestamps at all', () => {
-    const events = [{ state: 'maintenance_mode', ts: 1000 }];
-    expect(expandConfirmedRepeats(events, [])).toEqual(events);
-    expect(expandConfirmedRepeats(events, undefined)).toEqual(events);
+describe('reconcileVisitRecords', () => {
+  it('claims a matching last_event point verbatim (its own real text and timestamp) when one exists near a visit', () => {
+    const deduped = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    const visits = [{ cat: 'Cat A', ts: 1002 }];
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([{ state: 'Cat A used the litter box', ts: 1000 }]);
   });
 
-  it('returns an empty array for missing/non-array events input', () => {
-    expect(expandConfirmedRepeats([], [1000])).toEqual([]);
-    expect(expandConfirmedRepeats(undefined, [1000])).toEqual([]);
-  });
-
-  it('leaves a row alone when its territory has zero or one confirmed timestamp (the common case)', () => {
-    const events = [{ state: 'maintenance_mode', ts: 1000 }];
-    // total_use knows nothing about a device-status event like this -- no
-    // confirmed timestamp anywhere nearby.
-    expect(expandConfirmedRepeats(events, [500000])).toEqual(events);
-  });
-
-  it('does not add a row when exactly one confirmed timestamp matches the existing row', () => {
-    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
-    expect(expandConfirmedRepeats(events, [1000])).toEqual(events);
-  });
-
-  it('adds one extra row per additional confirmed timestamp in the same territory, reusing the row\'s own text', () => {
-    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
-    expect(expandConfirmedRepeats(events, [1000, 61000])).toEqual([
-      { state: 'Cat A used the litter box', ts: 1000 },
-      { state: 'Cat A used the litter box', ts: 61000 },
+  it('synthesizes the standard phrase at the visit\'s own timestamp when no matching last_event point exists at all', () => {
+    expect(reconcileVisitRecords([], [{ cat: 'Cat A', ts: 5000 }])).toEqual([
+      { state: 'Cat A used the litter box', ts: 5000 },
     ]);
   });
 
-  it('adds a row for every extra confirmed timestamp when there are more than two in one territory', () => {
-    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
-    expect(expandConfirmedRepeats(events, [1000, 61000, 121000])).toEqual([
-      { state: 'Cat A used the litter box', ts: 1000 },
-      { state: 'Cat A used the litter box', ts: 61000 },
-      { state: 'Cat A used the litter box', ts: 121000 },
+  it('leaves an unclaimed last_event point untouched as a device-status row', () => {
+    const deduped = [{ state: 'maintenance_mode', ts: 1000 }];
+    expect(reconcileVisitRecords(deduped, [])).toEqual(deduped);
+  });
+
+  it('never claims a nearby last_event point whose text does not match the visit\'s own expected phrase', () => {
+    // REGRESSION (reported live 2026-07-24): a real visit at 07:28:00 was
+    // followed 67s later by an unrelated "manual_odor_completed" -- close
+    // enough in time that a text-agnostic "nearest point" match would wrongly
+    // claim it as the visit's own narration, losing manual_odor_completed's
+    // own row entirely. Matching only ever considers a point whose text
+    // already equals the visit's expected phrase.
+    const deduped = [{ state: 'manual_odor_completed', ts: 1067000 }];
+    const visits = [{ cat: 'Cat A', ts: 1000000 }];
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000000 }, // synthesized, not claimed
+      { state: 'manual_odor_completed', ts: 1067000 }, // untouched
     ]);
   });
 
-  it('never reaches a confirmed timestamp across a neighboring kept row\'s territory boundary', () => {
-    const events = [
-      { state: 'Cat A used the litter box', ts: 1000 },
-      { state: 'Maintenance mode', ts: 100000 },
+  it('does not let two visits claim the same last_event point -- the second falls back to a synthesized row', () => {
+    const deduped = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    const visits = [
+      { cat: 'Cat A', ts: 1000 },
+      { cat: 'Cat A', ts: 60000 },
     ];
-    // Placed just past the midpoint (50500) between the two rows, so it
-    // falls into Maintenance mode's territory rather than Cat A's, even
-    // though Cat A's text is what a naive "nearest same-text repeat" guess
-    // might expect.
-    const confirmedJustPastMidpoint = (1000 + 100000) / 2 + 1;
-    const result = expandConfirmedRepeats(events, [1000, confirmedJustPastMidpoint]);
-    // Maintenance mode's territory got the extra confirmed timestamp, but it
-    // has no companion there (only 1 match), so nothing is added -- and Cat
-    // A's territory only had its own single match, so no extra row anywhere.
-    expect(result).toEqual(events);
-  });
-
-  it('claims the confirmed timestamp NEAREST to the row\'s own ts, not just the first one in the territory', () => {
-    const events = [{ state: 'Cat A used the litter box', ts: 1000 }];
-    // 900 is nearer to 1000 than 50000 is -- 900 should be treated as
-    // "already represented" by the existing row, and 50000 as the extra.
-    expect(expandConfirmedRepeats(events, [50000, 900])).toEqual([
-      { state: 'Cat A used the litter box', ts: 1000 },
-      { state: 'Cat A used the litter box', ts: 50000 },
-    ]);
-  });
-
-  it('sorts the final output by timestamp, interleaving synthesized rows with the following real row', () => {
-    const events = [
-      { state: 'Cat A used the litter box', ts: 1000 },
-      { state: 'Maintenance mode', ts: 200000 },
-    ];
-    const result = expandConfirmedRepeats(events, [1000, 60000]);
-    expect(result).toEqual([
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([
       { state: 'Cat A used the litter box', ts: 1000 },
       { state: 'Cat A used the litter box', ts: 60000 },
+    ]);
+  });
+
+  it('claims the nearest matching point when more than one exists within tolerance, leaving the other as its own (unclaimed) row', () => {
+    const deduped = [
+      { state: 'Cat A used the litter box', ts: 900 },
+      { state: 'Cat A used the litter box', ts: 5000 },
+    ];
+    const visits = [{ cat: 'Cat A', ts: 1000 }];
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([
+      { state: 'Cat A used the litter box', ts: 900 },
+      { state: 'Cat A used the litter box', ts: 5000 },
+    ]);
+  });
+
+  it('honors a custom toleranceMs instead of the 10s default', () => {
+    const visits = [{ cat: 'Cat A', ts: 8000 }]; // 7s away from the point below
+    const deduped = [{ state: 'Cat A used the litter box', ts: 1000 }];
+    // Within the 10s default tolerance: claimed, verbatim ts kept.
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([{ state: 'Cat A used the litter box', ts: 1000 }]);
+    // Outside a tightened 5s tolerance: no claim, so the visit is
+    // synthesized at its own ts and the original point is left as its own
+    // (now unclaimed) row.
+    expect(reconcileVisitRecords(deduped, visits, { toleranceMs: 5000 })).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+      { state: 'Cat A used the litter box', ts: 8000 },
+    ]);
+  });
+
+  it('handles missing/non-array input gracefully', () => {
+    expect(reconcileVisitRecords(undefined, undefined)).toEqual([]);
+    expect(reconcileVisitRecords([], [])).toEqual([]);
+    expect(reconcileVisitRecords(null, [{ cat: 'Cat A', ts: 1000 }])).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
+    ]);
+  });
+
+  it('sorts the final output by timestamp, interleaving synthesized visit rows with device-status rows', () => {
+    const deduped = [{ state: 'Maintenance mode', ts: 200000 }];
+    const visits = [{ cat: 'Cat A', ts: 1000 }];
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([
+      { state: 'Cat A used the litter box', ts: 1000 },
       { state: 'Maintenance mode', ts: 200000 },
     ]);
   });
 
-  // --------------------------------------------------------------------
-  // REGRESSION (reported live 2026-07-24): total_use confirmed two real
-  // visits by the same cat about a minute apart (+43s at 16:03:15 UTC, +46s at
-  // 16:04:17 UTC); last_event only ever got ONE history point ("Cat A used
-  // the litter box" at 16:03:15.628) because its value was already that
-  // exact text from the first visit -- the second visit didn't change it,
-  // so HA's recorder never wrote a second point at all. Working Records
-  // showed one row where the chart (built from total_use independently)
-  // showed two. Real timestamps in epoch ms (already *1000'd, matching
-  // dedupeFlickerRepeats' own output shape).
-  // --------------------------------------------------------------------
-  it('REGRESSION: adds back a real visit last_event never got its own history point for', () => {
-    const dedupedEvents = [{ state: 'Cat A used the litter box', ts: 1753373095628 }]; // 16:03:15.628 UTC
-    const confirmedEventTimestamps = [1753373095627, 1753373157443]; // 16:03:15.627 and 16:04:17.443 UTC
-    expect(expandConfirmedRepeats(dedupedEvents, confirmedEventTimestamps)).toEqual([
-      { state: 'Cat A used the litter box', ts: 1753373095628 },
-      { state: 'Cat A used the litter box', ts: 1753373157443 },
+  // ----------------------------------------------------------------------
+  // REGRESSION (real captured case, 2026-07-16): two genuinely separate real
+  // visits by the same cat, 5.5 minutes apart, sharing identical narration
+  // text with an unrelated `unavailable` blip between them (both got their
+  // own real last_event point). Confirmed via total_use, which independently
+  // recorded a real increment within ~1s of EACH occurrence.
+  // ----------------------------------------------------------------------
+  it('REGRESSION: keeps two real same-text visits separated only by an unrelated unavailable blip', () => {
+    const deduped = dedupeFlickerRepeats(
+      [
+        { s: 'Cat A used the litter box', lu: 1784171571.292725 },
+        { s: 'unavailable', lu: 1784171872.012611 },
+        { s: 'Cat A used the litter box', lu: 1784171902.253726 },
+      ],
+      ['unavailable', 'unknown', 'no_events_yet'],
+    );
+    const visits = [
+      { cat: 'Cat A', ts: 1784171571291.657 },
+      { cat: 'Cat A', ts: 1784171902252.968 },
+    ];
+    // dedupeFlickerRepeats merges the raw pair into one point (plain
+    // text-only rule, no total_use awareness needed anymore); the SECOND
+    // visit then has nothing left to claim and gets its own synthesized row
+    // at its own real (total_use) timestamp instead -- same final text
+    // either way.
+    expect(reconcileVisitRecords(deduped, visits)).toEqual([
+      { state: 'Cat A used the litter box', ts: 1784171571292.725 },
+      { state: 'Cat A used the litter box', ts: 1784171902252.968 },
     ]);
+  });
+
+  // ----------------------------------------------------------------------
+  // REGRESSION (real captured case, 2026-07-24/25): last_event sometimes
+  // reports NOTHING AT ALL for a real, total_use-confirmed visit -- not a
+  // repeat, not a flicker, just silence, because an unrelated device-status
+  // event happens moments later and overwrites last_event first. An earlier
+  // fix (expandConfirmedRepeats) tried to recover this via a territory
+  // bounded by neighboring last_event ROWS regardless of their own text --
+  // that territory could be cut short by the very device-status row that
+  // caused the problem, silently dropping the visit. This function has no
+  // such failure mode since it resolves each visit independently.
+  // ----------------------------------------------------------------------
+  it('REGRESSION: recovers a real visit last_event silently dropped because an unrelated event overwrote it moments later', () => {
+    const earlierVisitLu = 1753341537.314577; // an earlier, unrelated real visit, its own point present
+    const odorLu = 1753341547.934055; // overwrote the visit below before it ever got its own point
+    const maintenanceLu = 1753341611.257991;
+    const missingVisitLu = 1753341480.341503; // the real visit last_event never mentioned at all
+
+    const deduped = dedupeFlickerRepeats(
+      [
+        { s: 'Cat A used the litter box', lu: earlierVisitLu },
+        { s: 'manual_odor_completed', lu: odorLu },
+        { s: 'maintenance_mode', lu: maintenanceLu },
+      ],
+      ['unavailable', 'unknown', 'no_events_yet'],
+    );
+    const visits = [
+      { cat: 'Cat A', ts: earlierVisitLu * 1000 - 1041 }, // near, not exact -- still within tolerance
+      { cat: 'Cat A', ts: missingVisitLu * 1000 },
+    ];
+    const result = reconcileVisitRecords(deduped, visits);
+    expect(result).toContainEqual({ state: 'Cat A used the litter box', ts: missingVisitLu * 1000 });
+    expect(result).toContainEqual({ state: 'manual_odor_completed', ts: odorLu * 1000 });
+    expect(result).toContainEqual({ state: 'maintenance_mode', ts: maintenanceLu * 1000 });
   });
 });
 

@@ -1,6 +1,6 @@
 /**
- * Regression tests against REAL captured PetKit PURAMAX history (three
- * full days, downloaded directly from a live instance's `total_use`/
+ * Regression tests against REAL captured PetKit PURAMAX history (five full
+ * days, downloaded directly from a live instance's `total_use`/
  * `last_used_by`/`last_event` sensors -- see test/fixtures/*.json). Cat
  * names are anonymized ("Cat A" / "Cat B") but every timestamp, delta, and
  * raw device value is real, unmodified data.
@@ -27,6 +27,13 @@
  * 2026-07-14 and 2026-07-15 were already correct before this fix and serve
  * as regression coverage: the redesigned algorithm must not change their
  * (already correct) results.
+ *
+ * 2026-07-24/25 are the days a Working Records under-count was reported
+ * live (see history.test.js's `reconcileVisitRecords` REGRESSION tests and
+ * `docs/ARCHITECTURE.md`) -- included here too so the ALREADY-TRUSTED
+ * total_use/last_used_by attribution this cross-check validates has full
+ * coverage across every day with a known real-world issue, not just the
+ * ones a fix happened to touch.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -57,7 +64,7 @@ function toMs(epochSeconds) {
   return Math.round(epochSeconds * 1000);
 }
 
-const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16'];
+const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16', '2026-07-24', '2026-07-25'];
 const groundTruth = loadGroundTruth();
 
 describe('real-data attribution regression (three full days of live PetKit PURAMAX history)', () => {

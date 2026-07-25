@@ -962,23 +962,25 @@ describe('PetkitPuramaxCard: Working Records event filtering (refs #11)', () => 
   });
 });
 
-describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no synthesis or pattern-matching (refs #13, #14, #16)', () => {
+describe('PetkitPuramaxCard: Working Records reconciled against total_use, never a computed re-phrasing (refs #13, #14, #16, #37)', () => {
   // Working Records used to merge total_use-derived visits AND last_event's
   // own narration, dedupe-reconciling the two -- fragile, and it kept
   // producing new bugs (issues #13, #14). It was then changed to a single
   // source (total_use/last_used_by) with a COMPUTED "<cat> just spent Ns"
   // sentence, replacing last_event's own real text -- but that's still not
-  // what PETKIT actually reported. Working Records now shows last_event's
-  // raw history completely verbatim: no computed re-phrasing, no pattern
-  // used to detect "is this a visit." Duration is intentionally not shown
-  // here (it's in the chart tooltip/Usage line instead, which still use the
-  // total_use/last_used_by reconstruction independently). The one narrow
-  // exception: `total_use`'s own visit timestamps (already fetched for the
-  // chart) are consulted as a binary "did a real visit independently happen
-  // here" check, purely to tell a flicker-repeat of the same text apart from
-  // two genuinely separate real visits sharing that text -- see
-  // `dedupeFlickerRepeats` and the two tests below. This never replaces a
-  // row's own text/content, unlike the reconciliation that caused #13/#14.
+  // what PETKIT actually reported. It was then made purely last_event-
+  // verbatim, no cross-reference at all -- but that turned out to
+  // under-count real visits last_event itself never reported (issue #37;
+  // see reconcileVisitRecords's doc comment in src/lib/history.js).
+  //
+  // The current design: a row's TEXT is either last_event's own raw value,
+  // verbatim, or -- only when total_use has independently confirmed a real
+  // visit last_event has NO matching point for at all -- the exact same
+  // phrasing PETKIT already uses for every other visit ("<cat> used the
+  // litter box"), never a computed/invented sentence with content
+  // last_event didn't itself assert somewhere. Duration is intentionally
+  // not shown here (it's in the chart tooltip/Usage line instead, which use
+  // the total_use/last_used_by reconstruction independently).
 
   it('shows a visit narration completely verbatim, with no duration and no re-phrasing', async () => {
     const cfg = baseConfig();
@@ -1024,16 +1026,17 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
     expect(rows[0].querySelector('.record-text').textContent).toBe('Unknown used the litter box');
   });
 
-  it('does not require or read total_use at all -- Working Records is independent of the chart/analytics reconstruction', async () => {
+  it('still shows a last_event narration verbatim when total_use has no matching confirmed visit for it', async () => {
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);
     const today9am = new Date();
     today9am.setHours(9, 0, 0, 0);
     const visitTs = Math.floor(today9am.getTime() / 1000);
-    // total_use has NO matching delta at all near this narration -- under
-    // the old "cross-reference total_use" design this row would have been
-    // dropped; verbatim last_event has no such dependency.
+    // total_use has NO matching delta at all near this narration (so
+    // reconcileVisitRecords has zero confirmedVisits to work with) -- the
+    // row still passes through as an unclaimed device-status-shaped row
+    // rather than being dropped for lack of a total_use match.
     const totalUsePoints = [{ s: '0', lu: visitTs - 3600 }];
     const lastEventHistory = [{ s: 'Cat A used the litter box', lu: visitTs }];
     const hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
@@ -1219,9 +1222,10 @@ describe('PetkitPuramaxCard: Working Records is last_event verbatim, with no syn
   });
 
   it('does not fabricate an extra row for a device-status event that total_use knows nothing about', async () => {
-    // total_use only tracks litter-box visits -- a repeated device-status
-    // event (e.g. maintenance_mode) must never gain a synthesized row just
-    // because some unrelated real visit happens to land in its territory.
+    // total_use only tracks litter-box visits -- a device-status event (e.g.
+    // maintenance_mode) never matches any visit's expected narration text,
+    // so it's never claimed/duplicated by reconcileVisitRecords no matter
+    // how many (or few) confirmed visits exist that day.
     const cfg = baseConfig();
     const card = makeCard();
     card.setConfig(cfg);

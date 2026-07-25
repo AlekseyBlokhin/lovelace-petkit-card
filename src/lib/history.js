@@ -165,31 +165,21 @@ export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinit
  * `hiddenStates` (matched case-insensitively) marks placeholder/noise
  * states -- e.g. `unavailable`, or a caller's own exclude list -- that are
  * dropped from the output entirely AND are the ONLY thing allowed to
- * trigger a merge: a repeat is only ever a MERGE CANDIDATE when the point
- * immediately before it (in raw arrival order, before any filtering) was
- * one of these hidden states -- i.e. exactly the "flickered to a hidden
- * state and recovered to the same value" signature.
+ * trigger a merge: a repeat is only ever collapsed into the previously kept
+ * record when the point immediately before it (in raw arrival order, before
+ * any filtering) was one of these hidden states -- i.e. exactly the
+ * "flickered to a hidden state and recovered to the same value" signature.
+ * Two GENUINELY separate real events sharing identical text with nothing
+ * hidden between them (e.g. two real "Auto cleaning done" events the same
+ * day) are deliberately NOT merged.
  *
- * A merge candidate is not automatically merged, though: real captured data
- * (2026-07-16) shows a genuine case of two SEPARATE real visits by the same
- * cat, 5.5 minutes apart, sharing identical narration text with an
- * unrelated `unavailable` blip between them -- indistinguishable from a
- * true flicker-repeat using this sensor's own text/timing alone (true
- * flicker chains span anywhere from seconds to hours, so no time-gap
- * threshold can separate the two cases). `options.confirmedEventTimestamps`
- * -- typically the SAME day's `total_use`-derived visit timestamps the
- * caller already has on hand for the chart, e.g. `deltaEvents(...)` output
- * -- resolves the ambiguity: a merge candidate is only actually merged when
- * NEITHER side has its own independent confirmed-event timestamp nearby (a
- * device-status flicker like `maintenance_mode`, which total_use knows
- * nothing about, always merges normally); if BOTH the earlier and later
- * occurrence land near their own confirmed timestamp, they're kept as two
- * separate rows. This is a narrow, binary "did something independently
- * verifiable happen here" check, not the kind of full merge/re-synthesis
- * (replacing last_event's own text with a computed sentence, matching every
- * row 1:1 against total_use) that caused real bugs before (issues #13, #14,
- * #16) -- omitting `confirmedEventTimestamps` falls back to the simpler
- * text-only rule.
+ * This is deliberately text-only, with no awareness of `total_use` or any
+ * other independent signal -- see `reconcileVisitRecords`, which consumes
+ * this function's output and is where that reconciliation now lives (an
+ * earlier version of this function folded a `confirmedEventTimestamps`
+ * option in here directly; see `reconcileVisitRecords`'s doc comment for
+ * why that turned out not to be enough on its own, and moved out into its
+ * own, more thorough function instead).
  *
  * REGRESSION: this exact dedup existed before (added after a live-confirmed
  * duplicate-row bug, refined twice more to fix a tracking edge case where a
@@ -199,21 +189,17 @@ export function deltaEvents(historyForEntity, { minDelta = 0, maxDelta = Infinit
  * sensor flickers to `unavailable` every ~30s-2min and republishes the
  * identical event text for as long as it remains the true last event -- one
  * observed run repeated 43 times over ~2 hours for what was really one
- * visit. See `history.test.js` for the real captured sequences (both the
- * flicker-repeat case and the genuinely-separate-visits case).
+ * visit. See `history.test.js` for the real captured sequence.
  *
  * @param {Array<object>} historyForEntity
  * @param {string[]} hiddenStates - raw state values to drop from the output
  *   and treat as transparent flicker noise (matched case-insensitively).
- * @param {{ confirmedEventTimestamps?: number[], confirmToleranceMs?: number }} [options]
  * @returns {Array<{ state: string, ts: number }>} ascending by ts, one
  *   entry per real event.
  */
-export function dedupeFlickerRepeats(historyForEntity, hiddenStates, options = {}) {
+export function dedupeFlickerRepeats(historyForEntity, hiddenStates) {
   if (!Array.isArray(historyForEntity)) return [];
   const hiddenSet = new Set(hiddenStates.map((s) => String(s).toLowerCase()));
-  const { confirmedEventTimestamps = [], confirmToleranceMs = 10000 } = options;
-  const hasConfirmedEventNear = (ts) => confirmedEventTimestamps.some((c) => Math.abs(c - ts) <= confirmToleranceMs);
 
   const points = historyForEntity
     .map(rawStateAndTs)
@@ -222,99 +208,117 @@ export function dedupeFlickerRepeats(historyForEntity, hiddenStates, options = {
 
   const events = [];
   let lastKeptState = null;
-  let lastKeptTs = null;
   let prevWasHidden = false;
   for (const { state, ts } of points) {
     if (hiddenSet.has(String(state).toLowerCase())) {
       prevWasHidden = true;
       continue;
     }
-    const isMergeCandidate = prevWasHidden && state === lastKeptState;
-    const bothIndependentlyConfirmed = isMergeCandidate && hasConfirmedEventNear(lastKeptTs) && hasConfirmedEventNear(ts);
-    const isFlickerRecovery = isMergeCandidate && !bothIndependentlyConfirmed;
+    const isFlickerRecovery = prevWasHidden && state === lastKeptState;
+    lastKeptState = state;
     prevWasHidden = false;
     if (isFlickerRecovery) continue;
-    lastKeptState = state;
-    lastKeptTs = ts;
     events.push({ state, ts });
   }
   return events;
 }
 
 /**
- * Fills in a real confirmed visit that `last_event` never got its OWN raw
- * history point for at all -- distinct from (and complementary to)
- * `dedupeFlickerRepeats`'s job of deciding whether an EXISTING repeated raw
- * point is a new event or not. `last_event` only gets a new history point
- * when its value actually CHANGES; two consecutive real visits with
- * identical narration text (typically the same cat visiting again shortly
- * after) and no `unavailable` flicker in between produce NO second history
- * point whatsoever -- there's nothing for `dedupeFlickerRepeats` to even
- * see, let alone merge or keep.
+ * The exact narration text PETKIT itself uses for a real visit (verified
+ * against real captured history for both a known cat and an unidentified
+ * one -- "Unknown used the litter box" when `catName` is
+ * `UNKNOWN_CAT_LABEL`). Exposed so a caller building `confirmedVisits` for
+ * `reconcileVisitRecords` can construct the exact same string this module
+ * uses internally, without duplicating the literal format in two places.
  *
- * REGRESSION (reported live 2026-07-24): total_use confirmed two real
- * visits by the same cat about a minute apart (+43s at 16:03:15, +46s at
- * 16:04:17 UTC); `last_event` only had a single raw point, for the first
- * one -- its value was already "Cat A used the litter box" from that first
- * visit, so the second, identical-text visit never changed it and HA's
- * recorder never wrote anything for it. Working Records showed only one
- * row where the chart (which reconstructs visits from `total_use`
- * independently, and already carries an unresolved identity/cat forward
- * across a repeat visit exactly the same way -- see `attributeCats`) showed
- * two.
+ * @param {string} catName
+ * @returns {string}
+ */
+export function visitNarrationText(catName) {
+  return `${catName} used the litter box`;
+}
+
+/**
+ * Builds Working Records' final event list by reconciling `last_event`'s
+ * own (deduped) history against `confirmedVisits` -- the ALREADY-RELIABLE
+ * total_use/last_used_by reconstruction that independently drives the chart
+ * (see `attributeCats`) -- rather than trusting `last_event` alone to know
+ * how many visits happened.
  *
- * Uses the same territory-bounded nearest-neighbor technique as
- * `attributeCats` (bounded by the midpoint to each neighboring EVENT in
- * `events`, so a confirmed timestamp can never be pulled across a
- * neighboring kept row no matter how far it has to reach): for each kept
- * event, the nearest confirmed timestamp in its territory is treated as the
- * one that's already represented by that row; every OTHER confirmed
- * timestamp in the same territory is a real, independently-verified repeat
- * with no history point of its own, and gets its own new row -- same text,
- * its own real confirmed timestamp. A territory with zero or one confirmed
- * timestamps (the common case -- most `last_event` values, e.g.
- * `maintenance_mode`, have nothing to do with `total_use` at all) is left
- * untouched.
+ * `last_event` turns out to be unreliable for visit narration specifically,
+ * in two distinct ways neither of which a text-only view of its own stream
+ * can safely correct:
+ *  - It flickers to a hidden state and recovers to the SAME text for as
+ *    long as nothing else happens (`dedupeFlickerRepeats` handles this).
+ *  - REGRESSION (reported live 2026-07-24/25): it can report NOTHING AT ALL
+ *    for a real, `total_use`-confirmed visit -- not a repeat, not a
+ *    flicker, just silence. Real captured cases: a visit at 07:28:00 UTC
+ *    was immediately followed (67s later) by an unrelated odor-removal
+ *    cycle that overwrote `last_event` to `manual_odor_completed` without
+ *    ever reporting the visit's own narration first; a visit at 19:20:23
+ *    UTC left `last_event` sitting on an OLDER visit's identical narration
+ *    text from over 10 minutes earlier, with nothing in between at all. A
+ *    previous fix (`expandConfirmedRepeats`) tried to recover these by
+ *    expanding an EXISTING kept `last_event` row's own midpoint-bounded
+ *    territory -- but that territory is bounded by whichever `last_event`
+ *    ROWS happen to be adjacent, regardless of their own text, so an
+ *    unrelated device-status row sitting between two real visits (as in
+ *    both cases above) could cut a visit's territory short before reaching
+ *    it, silently dropping it. This function has no such failure mode: it
+ *    resolves each `confirmedVisits` entry independently, never through an
+ *    unrelated row's territory.
  *
- * @param {Array<{ state: string, ts: number }>} events - ascending by ts,
- *   e.g. `dedupeFlickerRepeats`'s own output.
- * @param {number[]} confirmedEventTimestamps
+ * For each confirmed visit (chronological order): the nearest not-yet-used
+ * `last_event` point whose text EXACTLY matches `visitNarrationText(cat)`,
+ * within `toleranceMs`, is used verbatim (its own real text and timestamp
+ * -- matching real observed near-simultaneous total_use/last_event writes
+ * for the same visit). If none qualifies, a row is synthesized with that
+ * same exact text at the visit's own (total_use-derived) timestamp -- never
+ * a computed/invented sentence, just the identical phrasing PETKIT already
+ * uses for every other visit. Matching only ever considers a point whose
+ * text already equals the specific visit's own expected phrase (never "the
+ * nearest point regardless of what it says"), so an unrelated real
+ * device-status event occurring moments before or after a visit is never
+ * mistaken for that visit's own narration.
+ *
+ * Every `last_event` point NOT claimed by a visit this way is a genuinely
+ * distinct device-status event (maintenance/cleaning/odor/errors) and
+ * passes through completely unchanged.
+ *
+ * @param {Array<{ state: string, ts: number }>} dedupedEvents - e.g.
+ *   `dedupeFlickerRepeats`'s own output.
+ * @param {Array<{ cat: string, ts: number }>} confirmedVisits - real visits
+ *   from the total_use/last_used_by reconstruction, `cat` already resolved
+ *   to a display name (e.g. `UNKNOWN_CAT_LABEL`).
+ * @param {{ toleranceMs?: number }} [options]
  * @returns {Array<{ state: string, ts: number }>} ascending by ts.
  */
-export function expandConfirmedRepeats(events, confirmedEventTimestamps) {
-  if (!Array.isArray(events) || events.length === 0) return events || [];
-  if (!Array.isArray(confirmedEventTimestamps) || confirmedEventTimestamps.length === 0) return events;
+export function reconcileVisitRecords(dedupedEvents, confirmedVisits, { toleranceMs = 10000 } = {}) {
+  const events = Array.isArray(dedupedEvents) ? dedupedEvents : [];
+  const visits = Array.isArray(confirmedVisits) ? confirmedVisits : [];
 
-  const confirmed = [...confirmedEventTimestamps].sort((a, b) => a - b);
-  const n = events.length;
-  const expanded = [];
-
-  for (let i = 0; i < n; i++) {
-    const ts = events[i].ts;
-    const lowerBound = i === 0 ? -Infinity : (events[i - 1].ts + ts) / 2;
-    const upperBound = i === n - 1 ? Infinity : (ts + events[i + 1].ts) / 2;
-    const inTerritory = confirmed.filter((c) => c >= lowerBound && c < upperBound);
-
-    expanded.push(events[i]);
-    if (inTerritory.length <= 1) continue;
-
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    inTerritory.forEach((c, idx) => {
-      const dist = Math.abs(c - ts);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestIdx = idx;
+  const claimed = new Set();
+  const visitRows = visits.map((visit) => {
+    const expectedText = visitNarrationText(visit.cat);
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    events.forEach((e, idx) => {
+      if (claimed.has(idx) || e.state !== expectedText) return;
+      const dist = Math.abs(e.ts - visit.ts);
+      if (dist <= toleranceMs && dist < bestDist) {
+        bestDist = dist;
+        bestIdx = idx;
       }
     });
-    inTerritory.forEach((c, idx) => {
-      if (idx === nearestIdx) return;
-      expanded.push({ state: events[i].state, ts: c });
-    });
-  }
+    if (bestIdx >= 0) {
+      claimed.add(bestIdx);
+      return { state: events[bestIdx].state, ts: events[bestIdx].ts };
+    }
+    return { state: expectedText, ts: visit.ts };
+  });
 
-  expanded.sort((a, b) => a.ts - b.ts);
-  return expanded;
+  const deviceStatusRows = events.filter((_, idx) => !claimed.has(idx));
+  return [...visitRows, ...deviceStatusRows].sort((a, b) => a.ts - b.ts);
 }
 
 /**

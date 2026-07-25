@@ -44,77 +44,82 @@ per-named-cat views).
 
 ## How Working Records works
 
-Working Records is `device_entities.last_event`'s own history, shown as
-Home Assistant itself would display each value — each raw point is run
+Working Records shows one row per real, distinct thing PETKIT reported,
+built in three steps: `event_exclude` filtering, `dedupeFlickerRepeats`
+(flicker dedup), then `reconcileVisitRecords` (visit reconciliation against
+`total_use`). A row's TEXT is either `last_event`'s own raw value (run
 through `hass.formatEntityState(stateObj, value)`, the same documented
-custom-card API the real frontend uses to format a historical value against
-an entity's current translation (so a PETKIT firmware event code like
-`manual_odor_failed_batt` renders using the integration's own `strings.json`
-translation, not a hand-maintained relabeling map — a raw value the
-integration doesn't translate is shown exactly as PETKIT reported it,
-untouched). There is no pattern-matching against the text to detect "is
-this a visit" and no synthesized re-phrasing — a row's TEXT never comes
-from anything but its own raw `last_event` value. A single stream deduped
-only against its own flicker noise has none of the cross-source
-reconciliation that caused a string of real bugs in earlier versions of
-this card (fully replacing a row's text with a computed sentence, matching
-every row 1:1 against `total_use`) — trade-off accepted: a Working Records
-visit row has no duration (still visible via the chart tooltip and the
-Usage line, which use the `total_use` reconstruction instead).
+custom-card API the real frontend uses — so a firmware code like
+`manual_odor_failed_batt` renders via the integration's own `strings.json`
+translation, untouched if PETKIT doesn't translate it) or, for a visit
+`last_event` never reported at all, the exact same narration phrasing
+PETKIT already uses everywhere else ("`<cat>` used the litter box") — never
+a computed/invented sentence with content `last_event` didn't itself assert
+somewhere.
 
-Two things filter/collapse the raw `last_event` stream:
+1. **`event_exclude`** (an explicit, configurable list of raw values,
+   default `["unavailable", "unknown", "no_events_yet"]`) hides those raw
+   values entirely.
+2. **`dedupeFlickerRepeats`** (`src/lib/history.js`) collapses a value that
+   reappears immediately after one of the `event_exclude` states back into
+   its original row. This sensor flickers to a hidden state (typically
+   `unavailable`) roughly every 30s–2min and republishes the identical event
+   text for as long as it remains the true last event — a real captured run
+   repeated the same value 43 times over ~2 hours for one visit. Without
+   this, every republish renders as its own duplicate row. The merge only
+   fires when the point *immediately preceding* the repeat (in raw arrival
+   order) was itself a hidden state; two genuinely separate real events
+   sharing identical text with nothing hidden between them are never
+   merged. This step is deliberately text-only, with no awareness of
+   `total_use` — see step 3 for why that turned out to still be necessary,
+   and why it lives in a separate function rather than folded in here.
+3. **`reconcileVisitRecords`** (`src/lib/history.js`) resolves `last_event`'s
+   deeper unreliability for VISIT narration specifically, using
+   `this._chartVisits` — the ALREADY-RELIABLE `total_use`/`last_used_by`
+   reconstruction that independently drives the chart (`attributeCats`) —
+   as the source of truth for how many visits happened and when. Two real,
+   confirmed failure modes drove this:
+   - Two GENUINELY separate real visits sharing identical text with an
+     unrelated hidden-state blip between them (real case, 2026-07-16, 5.5
+     minutes apart) are indistinguishable from a true flicker chain using
+     `last_event`'s own text/timing alone — no time-gap threshold works,
+     since flicker chains span anywhere from seconds to hours in real data.
+   - `last_event` can report NOTHING AT ALL for a real visit — not a
+     repeat, not a flicker, just silence (real cases, 2026-07-24/25: a
+     visit was immediately followed by an unrelated device-status event
+     that overwrote `last_event` before the visit's own narration was ever
+     asserted). An earlier fix for this (`expandConfirmedRepeats`, since
+     removed) tried to recover such visits by expanding an EXISTING kept
+     `last_event` row's own midpoint-bounded territory — but that territory
+     is bounded by whichever `last_event` ROWS happen to be adjacent,
+     regardless of their own text, so the very unrelated device-status row
+     that caused the problem could cut the territory short before reaching
+     the visit, silently dropping it.
 
-- **`event_exclude`** (an explicit, configurable list of raw values,
-  default `["unavailable", "unknown", "no_events_yet"]`) hides those raw
-  values entirely.
-- **`dedupeFlickerRepeats`** (`src/lib/history.js`) collapses a value that
-  reappears immediately after one of the `event_exclude` states back into
-  its original row. This sensor flickers to a hidden state (typically
-  `unavailable`) roughly every 30s–2min and republishes the identical event
-  text for as long as it remains the true last event — a real captured run
-  repeated the same value 43 times over ~2 hours for one visit. Without
-  this, every republish renders as its own duplicate row. The merge only
-  fires when the point *immediately preceding* the repeat (in raw arrival
-  order) was itself a hidden state.
+   `reconcileVisitRecords` avoids both failure modes by resolving each
+   confirmed visit independently rather than through any existing row's
+   territory: for each visit (chronological order), the nearest
+   not-yet-claimed `dedupeFlickerRepeats` point whose text EXACTLY equals
+   that visit's own expected phrase ("`<cat>` used the litter box"), within
+   a tolerance, is used verbatim (own real text and timestamp); if none
+   qualifies, a row is synthesized with that same phrase at the visit's own
+   `total_use` timestamp. Matching only ever considers a point whose text
+   already matches the SPECIFIC visit's own expected phrase — never "the
+   nearest point regardless of what it says" — so an unrelated real
+   device-status event occurring moments before or after a visit is never
+   mistaken for that visit's own narration, and each `last_event` point can
+   be claimed by at most one visit. Every point NOT claimed by any visit is
+   a genuinely distinct device-status event and passes through unchanged.
 
-  That alone isn't quite safe: real captured data (2026-07-16) shows two
-  GENUINELY separate real visits by the same cat, 5.5 minutes apart, sharing
-  identical text with an unrelated hidden-state blip between them — no
-  time-gap threshold can tell this apart from a true flicker chain, since
-  those span anywhere from seconds to hours in real data. `_renderRecordsSection`
-  passes `this._chartVisits`' own timestamps in as
-  `confirmedEventTimestamps` — the same `total_use`-derived visit
-  reconstruction already computed for the chart, reused here purely as a
-  narrow, binary "did an independently verified visit happen near each
-  side of this repeat" check. A merge candidate only actually merges when
-  *neither* side has its own nearby confirmed timestamp (which is true for
-  ordinary device-status flicker, since `total_use` only tracks litter-box
-  visits); if *both* sides are independently confirmed, they're kept as two
-  rows. This is deliberately narrower than the reconciliation approach that
-  caused the earlier bugs above: it never touches a row's text or duration,
-  and it only ever affects the flicker-recovery merge decision.
+This is still narrower than the full merge/re-synthesis (replacing every
+row's text, matching every row 1:1 against `total_use`) that caused the
+earliest bugs in this area: it never touches an EXISTING row's own text,
+and only ever adds a row using PETKIT's own established phrasing when
+`total_use` has independently confirmed a visit that `last_event` has no
+data for at all.
 
-- **`expandConfirmedRepeats`** (`src/lib/history.js`) solves a different
-  problem: a real visit that `last_event` never got a history point for AT
-  ALL. `last_event` only gets a new point when its value actually changes —
-  two consecutive real visits with identical narration text (typically the
-  same cat visiting again shortly after) and no `unavailable` flicker
-  between them produce NO second history point whatsoever, so there's
-  nothing for `dedupeFlickerRepeats` to even see. Real captured case
-  (2026-07-24): `total_use` confirmed two real visits by the same cat about
-  a minute apart; `last_event` had exactly one raw point, for the first one.
-  `expandConfirmedRepeats` runs on `dedupeFlickerRepeats`'s output using the
-  same territory-bounded nearest-neighbor technique as `attributeCats`
-  (bounded by the midpoint to each neighboring row, so a confirmed timestamp
-  can never be pulled across a neighboring row no matter how far it has to
-  reach): the confirmed timestamp nearest a kept row's own ts is treated as
-  already represented by it; any OTHER confirmed timestamp in the same
-  territory gets its own new row, reusing that row's exact text. A territory
-  with zero or one confirmed timestamp (the common case — most `last_event`
-  values have nothing to do with `total_use` at all) is untouched.
-
-Both of these are narrow, binary cross-checks against `total_use`'s own
-visit reconstruction (already fetched for the chart) — never the kind of
-full merge/re-synthesis (replacing a row's text, matching every row 1:1)
-that caused the earlier bugs. Neither ever invents new text; they only
-decide how many rows a run of identical `last_event` text becomes.
+See `test/fixtures/README.md` for how this is validated against complete
+real device-history fixtures (not just a couple of hand-picked visits) —
+`test/component/real-data-golden.test.js` checks the FULL ordered Working
+Records list for five real captured days against independently-derived
+expected values.

@@ -13,6 +13,15 @@
  * output into the DOM (e.g. the Unknown pseudo-cat's usage-line entry, or
  * the Working Records exclude-list filtering) would be caught here even if
  * every library-level unit test passed.
+ *
+ * `test/fixtures/ground-truth.json`'s `aggregate`/`working_records` per day
+ * are produced by a standalone Python reference implementation (NOT this
+ * repo's JS, and not by running this card's own code and copying its
+ * output -- see test/fixtures/README.md), then hand-verified against the
+ * raw fixture data for every real bug this suite exists to catch. If a test
+ * here ever fails, that means the CODE regressed -- diagnose the actual
+ * discrepancy against the raw fixture first; do not "fix" a failure by
+ * regenerating ground-truth.json from the (possibly buggy) implementation.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -25,7 +34,7 @@ if (!customElements.get('petkit-puramax-card')) {
 }
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
-const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16', '2026-07-24'];
+const DAYS = ['2026-07-14', '2026-07-15', '2026-07-16', '2026-07-24', '2026-07-25'];
 
 function loadFixture(day) {
   return JSON.parse(readFileSync(join(FIXTURES_DIR, `${day}.json`), 'utf-8'));

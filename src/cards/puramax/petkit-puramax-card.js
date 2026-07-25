@@ -8,7 +8,7 @@ import {
   catChangeEvents,
   attributeCats,
   dedupeFlickerRepeats,
-  expandConfirmedRepeats,
+  reconcileVisitRecords,
   UNKNOWN_CAT_LABEL,
 } from '../../lib/history.js';
 import { niceStep, buildScales, buildGridLines } from '../../lib/chart-math.js';
@@ -58,9 +58,10 @@ import {
  *    `_fetchVisits()` for how a duration+identity per visit is derived from
  *    those two generic sensors.
  *  - Working Records is `device_entities.last_event`'s own history, shown
- *    as Home Assistant itself would display each value — see
- *    `_renderRecordsSection()` for why it's deliberately NOT
- *    cross-referenced with the reconstruction above.
+ *    as Home Assistant itself would display each value, RECONCILED against
+ *    the reconstruction above (`reconcileVisitRecords`) since `last_event`
+ *    alone turns out to be unreliable for visit narration -- see
+ *    `_renderRecordsSection()` and `docs/ARCHITECTURE.md`.
  *
  * A `LitElement`: `render()` declares the whole card from current state on
  * every update, and Lit's own diffing patches only what changed (auto
@@ -868,43 +869,40 @@ export class PetkitPuramaxCard extends LitElement {
     `;
   }
 
-  // Working Records has exactly ONE source of truth, and it's `last_event`
-  // -- rendered as Home Assistant itself would show that value (via
-  // `hass.formatEntityState`, which reads the PETKIT integration's own
+  // Working Records shows one row per real, DISTINCT thing that happened --
+  // rendered as Home Assistant itself would show `last_event`'s raw text
+  // (via `hass.formatEntityState`, which reads the PETKIT integration's own
   // `strings.json` enum translations), never a hand-maintained relabeling
-  // map and never interpreted through a pattern/regex. Every DISTINCT event
-  // PETKIT reports is shown, in arrival order; `event_exclude` hides an
-  // explicit, configurable list of raw values entirely, and doubles as the
-  // signal `dedupeFlickerRepeats` uses to collapse a value that flickers to
-  // a hidden state and recovers to itself back into its original row (see
-  // that function -- this sensor re-emits the identical value for as long
-  // as it remains the true last event, so a naive one-row-per-history-point
-  // view would show dozens of duplicate rows for a single real event).
-  // The ONLY cross-reference to the total_use/last_used_by reconstruction
-  // is `this._chartVisits`' own timestamps, passed through as
-  // `confirmedEventTimestamps` to two narrow, binary "did an independently
-  // verified visit happen near here" checks -- never a full merge/
-  // re-synthesis (replacing last_event's own text, matching every row 1:1
-  // against total_use) like the approach that caused real bugs before (see
-  // git history / issues #13, #14, #16):
-  //  - `dedupeFlickerRepeats` uses it to tell a genuine flicker-repeat apart
-  //    from two separate real visits that happen to share identical text
-  //    (confirmed real case, 2026-07-16).
-  //  - `expandConfirmedRepeats` uses it to add back a real visit that
-  //    `last_event` never got its own history point for AT ALL, because its
-  //    value didn't change and nothing flickered (confirmed real case,
-  //    2026-07-24 -- see that function's doc comment).
-  // Neither ever changes what an EXISTING row says, only whether a
-  // same-text repeat counts as new / how many rows a run of identical text
-  // becomes.
+  // map. `event_exclude` hides an explicit, configurable list of raw values
+  // entirely, and doubles as the signal `dedupeFlickerRepeats` uses to
+  // collapse a value that flickers to a hidden state and recovers to itself
+  // back into its original row (this sensor re-emits the identical value
+  // for as long as it remains the true last event, so a naive
+  // one-row-per-history-point view would show dozens of duplicate rows for
+  // a single real event).
+  //
+  // `last_event`'s own stream turns out to be unreliable for VISIT
+  // narration specifically -- confirmed live, it can go completely silent
+  // for a real visit (no flicker, no repeat, just nothing) when an
+  // unrelated device-status event happens moments later and overwrites it
+  // first. `reconcileVisitRecords` resolves each real visit from
+  // `this._chartVisits` (the already-reliable total_use/last_used_by
+  // reconstruction that independently drives the chart) against
+  // `last_event`'s deduped stream directly, rather than through an existing
+  // row's own territory -- see that function's doc comment for the real
+  // cases this fixes that an earlier, territory-based attempt missed. It
+  // only ever uses last_event's own verbatim text when a point genuinely
+  // matches a visit's expected phrase; a visit with no match gets a row in
+  // the exact same phrasing PETKIT already uses everywhere else, never a
+  // computed/invented sentence.
   _renderRecordsSection() {
     const cfg = this._config;
     const eventHist = this._chartEventHist || [];
     const lastEventEntity = this._deviceEntities.last_event;
     const excludeList = (cfg.event_exclude || DEFAULT_EVENT_EXCLUDE).map((s) => String(s).toLowerCase());
-    const confirmedEventTimestamps = (this._chartVisits || []).map((v) => v.ts);
-    const dedupedEvents = dedupeFlickerRepeats(eventHist, excludeList, { confirmedEventTimestamps });
-    const records = expandConfirmedRepeats(dedupedEvents, confirmedEventTimestamps).map(({ state, ts }) => ({
+    const confirmedVisits = this._visits().map((v) => ({ cat: v.cat.name, ts: v.ts }));
+    const dedupedEvents = dedupeFlickerRepeats(eventHist, excludeList);
+    const records = reconcileVisitRecords(dedupedEvents, confirmedVisits).map(({ state, ts }) => ({
       ts,
       icon: 'mdi:information-outline',
       color: 'var(--secondary-text-color)',
