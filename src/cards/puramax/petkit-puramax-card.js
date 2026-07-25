@@ -592,14 +592,33 @@ export class PetkitPuramaxCard extends LitElement {
     }
     if (!this._config) return nothing;
     const cfg = this._config;
+    // `title` is a NULLISH-coalescing default, not `||` -- `title: ""` is a
+    // deliberate "no title" (distinct from the key being absent entirely),
+    // and must be respected as an empty string rather than falling back to
+    // DEFAULT_TITLE the way any other falsy value would. When there's no
+    // title AND no visible state badge, the whole `.header` row is skipped
+    // (not just left visually blank) -- an empty-but-present flex row still
+    // reserves its own line-height plus ha-card's inter-section `gap`,
+    // which reads as an oversized top padding compared to the other 3 sides.
+    const title = cfg.title ?? DEFAULT_TITLE;
+    const hasStateBadge = cfg.show_state !== false && !!this._s(this._deviceEntities.state, null);
+    const showHeader = title !== '' || hasStateBadge;
     return html`
       <ha-card>
-        <div class="header">
-          <div class="title">${cfg.title || DEFAULT_TITLE}</div>
-          ${cfg.show_state !== false ? this._renderStateBadge() : nothing}
-        </div>
+        ${showHeader
+          ? html`
+              <div class="header">
+                ${title !== '' ? html`<div class="title">${title}</div>` : nothing}
+                ${cfg.show_state !== false ? this._renderStateBadge() : nothing}
+              </div>
+            `
+          : nothing}
         <div class="status-row" id="status-row">${this._renderStatusRow()}</div>
-        <div class="controls-row" id="controls-row">${this._renderControlsRow()}</div>
+        <div
+          class="controls-row"
+          id="controls-row"
+          style=${cfg.controls_row_columns ? `grid-template-columns: repeat(${cfg.controls_row_columns}, 1fr)` : nothing}
+        >${this._renderControlsRow()}</div>
         ${cfg.show_history !== false ? this._renderChartSection() : nothing}
         ${cfg.show_analytics !== false ? this._renderAnalyticsSection() : nothing}
         ${cfg.show_working_records !== false ? this._renderRecordsSection() : nothing}

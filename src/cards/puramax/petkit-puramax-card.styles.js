@@ -50,7 +50,15 @@ export const CARD_STYLES = css`
   .chip-label { font-size: 0.7em; color: var(--secondary-text-color); }
   .chip-value { font-size: 0.95em; color: var(--primary-text-color); font-weight: 500; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .controls-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pk-space-sm); }
+  /* auto-fit + minmax (same pattern as .analytics-grid below) sizes columns
+     from however many controls are actually visible right now -- 3 buttons
+     fill the row as 3 equal columns, not 3-of-4 with a dead gap where a
+     hardcoded 4th column used to sit. Recomputes automatically when
+     controls_row[].visibility changes which buttons are shown (e.g. a
+     Start/Exit Maintenance pair), with no JS column-counting needed.
+     controls_row_columns (config, see petkit-puramax-card.js) overrides
+     this with a fixed count via an inline style when explicitly set. */
+  .controls-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: var(--pk-space-sm); }
   ha-control-button.ctrl-btn {
     width: 100%;
     height: auto;

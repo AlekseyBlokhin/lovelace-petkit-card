@@ -558,6 +558,42 @@ describe('PetkitPuramaxCard: rendering', () => {
     expect(buttons.length).toBe(3);
   });
 
+  // REGRESSION (reported live): the controls row used a hardcoded
+  // grid-template-columns: repeat(4, 1fr), so 3 configured buttons left a
+  // dead 4th-column-worth of empty space instead of the 3 buttons filling
+  // the row. Auto-fit/minmax (CSS-only, see petkit-puramax-card.styles.js)
+  // sizes columns from however many are actually rendered instead.
+  it('does not set an inline grid-template-columns override by default (CSS auto-fit handles sizing)', async () => {
+    const cfg = baseConfig({
+      controls_row: [
+        { name: 'A', entity: 'switch.a', tap_action: { action: 'toggle' } },
+        { name: 'B', entity: 'switch.b', tap_action: { action: 'toggle' } },
+        { name: 'C', entity: 'switch.c', tap_action: { action: 'toggle' } },
+      ],
+    });
+    card.setConfig(cfg);
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const row = card.shadowRoot.getElementById('controls-row');
+    expect(row.style.gridTemplateColumns).toBe('');
+  });
+
+  it('honors controls_row_columns to force a fixed column count instead of auto-fit', async () => {
+    const cfg = baseConfig({
+      controls_row_columns: 4,
+      controls_row: [
+        { name: 'A', entity: 'switch.a', tap_action: { action: 'toggle' } },
+        { name: 'B', entity: 'switch.b', tap_action: { action: 'toggle' } },
+        { name: 'C', entity: 'switch.c', tap_action: { action: 'toggle' } },
+      ],
+    });
+    card.setConfig(cfg);
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    const row = card.shadowRoot.getElementById('controls-row');
+    expect(row.style.gridTemplateColumns).toBe('repeat(4, 1fr)');
+  });
+
   it('a perform-action tap_action calls hass.callService with the domain/service split from perform_action', async () => {
     const cfg = baseConfig({
       controls_row: [
@@ -710,6 +746,48 @@ describe('PetkitPuramaxCard: rendering', () => {
     card.setConfig(baseConfig({ title: 'My Litter Box' }));
     card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
     await flush();
+    expect(card.shadowRoot.querySelector('.title').textContent).toBe('My Litter Box');
+  });
+
+  // REGRESSION (reported live): `title: ""` used to fall back to
+  // DEFAULT_TITLE (a plain `||` treats "" the same as unset), with no way to
+  // actually have no title at all short of a workaround like `title: " "`.
+  it('treats an explicit empty-string title as "no title", not a fallback to the default', async () => {
+    card.setConfig(baseConfig({ title: '' }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.title')).toBeNull();
+  });
+
+  // REGRESSION (reported live): the `" "` workaround for hiding the title
+  // left `.header` rendering as an empty-but-present flex row, which still
+  // reserves its own line-height plus ha-card's inter-section gap -- visibly
+  // more top padding than the other 3 sides. With no title AND no visible
+  // state badge, `.header` must not render at all.
+  it('omits the whole header row when there is no title and no visible state badge', async () => {
+    card.setConfig(baseConfig({ title: '', show_state: false }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.header')).toBeNull();
+  });
+
+  it('still renders the header (for the state badge alone) when there is no title but the state badge has a value', async () => {
+    card.setConfig(baseConfig({ title: '' })); // baseConfig's device_entities.state is already set
+    card.hass = makeHass({
+      'sensor.test_petkit_error': { state: 'no_error' },
+      'sensor.test_petkit_state': { state: 'idle' },
+    });
+    await flush();
+    expect(card.shadowRoot.querySelector('.header')).not.toBeNull();
+    expect(card.shadowRoot.querySelector('.title')).toBeNull();
+    expect(card.shadowRoot.getElementById('state-badge')).not.toBeNull();
+  });
+
+  it('renders the header for a non-empty title even with show_state: false', async () => {
+    card.setConfig(baseConfig({ title: 'My Litter Box', show_state: false }));
+    card.hass = makeHass({ 'sensor.test_petkit_error': { state: 'no_error' } });
+    await flush();
+    expect(card.shadowRoot.querySelector('.header')).not.toBeNull();
     expect(card.shadowRoot.querySelector('.title').textContent).toBe('My Litter Box');
   });
 

@@ -150,7 +150,7 @@ or a full example at
 | Key | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `type` | yes | string | — | Must be `custom:petkit-puramax-card`. |
-| `title` | no | string | `"PETKIT PURAMAX"` | Card header title. |
+| `title` | no | string | `"PETKIT PURAMAX"` | Card header title. Set to `""` for no title — the whole header row (including its spacing) disappears entirely unless `show_state` is also showing a state badge, rather than falling back to the default. |
 | `show_state` | no | boolean | `true` | Shows [`device_entities.state`](#device_entities) top-right of the header (e.g. "Idle"). Tapping it opens that entity's native more-info dialog, same as a status chip. |
 | `show_history` | no | boolean | `true` | Shows the day-switchable visit chart and its "Usage `<Day>`" line. |
 | `show_working_records` | no | boolean | `true` | Shows the [Working Records](./docs/ARCHITECTURE.md#how-working-records-works) timeline. |
@@ -162,6 +162,7 @@ or a full example at
 | `cats` | yes | array, min 1 | — | One entry per cat. See [`cats[]`](#cats) below. |
 | `info_row` | no | array | `[]` | Status chips, in order. See [`info_row[]`](#info_row) below. |
 | `controls_row` | no | array | `[]` | Buttons, in order. See [`controls_row[]`](#controls_row) below. |
+| `controls_row_columns` | no | number | auto | The controls row sizes its columns automatically from however many buttons are actually visible right now (so 3 buttons fill the row as 3 equal columns, not 3-of-4 with a dead gap) — set this to force a fixed column count instead (e.g. to always leave room for a 4th button that only shows in some states, so the visible ones don't reflow width when it appears). YAML-only — no visual editor field. |
 | `decline_threshold_pct` | no | number, 0-100 | `60` | [Analytics](./docs/ARCHITECTURE.md#how-the-chart-usage-line-and-analytics-work) warns when today's total is below this percent of the 7-day average (or symmetrically above `200 - this`). |
 | `no_visit_alert_hours` | no | number, 1-168 | `8` | Shows a per-cat "hasn't used the litter box" banner once a cat's most recent visit is at least this many hours ago. An absolute check, not relative to history — won't drift the way a rolling-average comparison can. |
 | `notify_service` | no | entity id (`notify` domain) | — | If set, also calls this notify entity/service (once per overdue episode, not on every re-render) when a cat crosses `no_visit_alert_hours`. This only fires while the card is actually loaded in a browser/companion-app tab — for a guarantee independent of whether a dashboard is open, pair it with (or use instead) a native HA automation. |
